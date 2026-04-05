@@ -1,0 +1,16 @@
+Backend :
+cd C:\Users\dhara\OneDrive\Desktop\FRA-Portal-main\Backend
+.\.venv\Scripts\activate
+uvicorn main:app --reload
+Frontend, in a new terminal:
+cd C:\Users\dhara\OneDrive\Desktop\FRA-Portal-main\Frontend
+npm run dev
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+cd C:\Users\dhara\OneDrive\Desktop\FRA-Portal-main - Copy\Backend
+.\.venv\Scripts\activate
+uvicorn main:app --reload
+
+Frontend, in a new terminal:
+cd C:\Users\dhara\OneDrive\Desktop\FRA-Portal-main - Copy\Frontend
+npm run dev
+
