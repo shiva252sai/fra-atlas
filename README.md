@@ -148,13 +148,6 @@
 
 | **Member** | **Role** | **Responsibility** |
 |-------------|-----------|--------------------|
-| **Jeet Goyal** | LLM, DSS & OCR System Developer | Developed LLM-based DSS engine, integrated OCR automation, LangChain pipeline, and database linking |
-| **Rakshit Hinduja** | Frontend Developer | Built officer dashboard and interactive map visualization |
-| **Harshil Khandelwal** | Backend Developer | Designed and implemented REST APIs, FastAPI backend, and database integration |
-| **Madhav Gupta** | CNN Model Developer | Developed land classification model using ISRO Bhuvan and EuroSAT dataset |
-| **Neelam Patidar** | Frontend & Research Lead | Assisted in UI/UX development, conducted research, and prepared the final presentation |
-| **Vedika Vishwakarma** | Presentation Designer | Assisted in designing and finalizing the project PPT |
-
 
 ---
 
