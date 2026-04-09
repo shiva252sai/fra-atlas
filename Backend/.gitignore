@@ -49,3 +49,6 @@ htmlcov/
 
 # Reports
 coverage.xml
+
+# Local scratch scripts
+scratch/
