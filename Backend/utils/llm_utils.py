@@ -4,7 +4,7 @@ import os
 import requests
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 # Added imports for DSS
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
@@ -20,7 +20,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
     temperature=0,
-    google_api_key=GEMINI_API_KEY
+    api_key=GEMINI_API_KEY
 )
 
 # -------------------------
@@ -39,14 +39,16 @@ UNIT_TO_ACRE = {
 # Prompt Template (OCR → JSON Schema)
 # -------------------------
 SCHEMA_PROMPT = """
-You are an assistant that extracts structured data from OCR text.
+You are an assistant that extracts structured data from noisy OCR text for Forest Rights Act claim forms in India.
 
 Rules:
 1. Extract only values present in text.
-2. No guessing.
-3. Fix spelling mistakes.
+2. Fix obvious OCR spelling mistakes for place names, claim types, and common FRA terms.
+3. Do not invent missing values.
 4. Missing fields = "".
-5. Return valid JSON only.
+5. Claim Type must be one of "IFR", "CR", or "CFR" when present.
+6. Return valid JSON only, with no prose, no markdown, and no code fences.
+7. Preserve dates in YYYY-MM-DD format when visible.
 
 JSON Format:
 {{
@@ -63,6 +65,7 @@ JSON Format:
     "Coordinates": "",
     "Land Use": "",
     "Claim ID": "",
+    "Claim Type": "",
     "Date of Application": "",
     "Water bodies": "",
     "Forest cover": "",
@@ -73,12 +76,53 @@ OCR Text:
 {ocr_text}
 """
 prompt = PromptTemplate.from_template(SCHEMA_PROMPT)
-chain = prompt | llm
+chain = prompt | llm | StrOutputParser()
+
+REPAIR_PROMPT = """
+You are a JSON repair assistant.
+
+Convert the following model output into exactly one valid JSON object with this schema:
+{{
+    "Patta-Holder Name": "",
+    "Father/Husband Name": "",
+    "Age": "",
+    "Gender": "",
+    "Address": "",
+    "Village Name": "",
+    "Block": "",
+    "District": "",
+    "State": "",
+    "Total Area Claimed": "",
+    "Coordinates": "",
+    "Land Use": "",
+    "Claim ID": "",
+    "Claim Type": "",
+    "Date of Application": "",
+    "Water bodies": "",
+    "Forest cover": "",
+    "Homestead": ""
+}}
+
+Rules:
+1. Return valid JSON only.
+2. No markdown or explanation.
+3. If a field is missing, set it to "".
+4. Keep only the schema fields above.
+
+Model output:
+{raw_output}
+"""
+repair_prompt = PromptTemplate.from_template(REPAIR_PROMPT)
+repair_chain = repair_prompt | llm | StrOutputParser()
 
 # -------------------------
 # JSON Cleaning
 # -------------------------
 def clean_llm_output(raw_text: str) -> str:
+    # Remove markdown code blocks if present
+    raw_text = re.sub(r'```(?:json)?', '', raw_text)
+    raw_text = raw_text.replace('```', '')
+    
     first = raw_text.find("{")
     last = raw_text.rfind("}")
     if first == -1 or last == -1:
@@ -87,7 +131,11 @@ def clean_llm_output(raw_text: str) -> str:
     raw_text = raw_text.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
     raw_text = raw_text.replace("'", '"')
     raw_text = re.sub(r',\s*([}\]])', r'\1', raw_text)
-    return raw_text
+    return raw_text.strip()
+
+def log_llm_output(stage: str, text: str) -> None:
+    preview = (text or "")[:600].replace("\n", "\\n")
+    print(f"LLM {stage}: {preview}")
 
 def safe_json_parse(text: str) -> dict:
     try:
@@ -96,8 +144,18 @@ def safe_json_parse(text: str) -> dict:
         cleaned = clean_llm_output(text)
         try:
             return json.loads(cleaned)
-        except Exception:
-            return {"raw_text": text, "error": "LLM JSON parse failed"}
+        except Exception as e:
+            print(f"JSON Parse Error: {e}")
+            log_llm_output("raw OCR response", text)
+            try:
+                repaired = repair_chain.invoke({"raw_output": text})
+                log_llm_output("repaired OCR response", repaired)
+                repaired_clean = clean_llm_output(repaired)
+                return json.loads(repaired_clean)
+            except Exception as repair_error:
+                print(f"LLM JSON repair failed: {repair_error}")
+                return {"error": "LLM JSON parse failed", "raw": text}
+
 
 # -------------------------
 # Regex Fallback
@@ -123,6 +181,27 @@ def fallback_extract(data: dict, text: str) -> dict:
         "Homestead": r"Homestead[:\-]?\s*(.+)"
     }
     for field, pattern in patterns.items():
+        if not data.get(field) or data.get(field) == "":
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                data[field] = match.group(1).strip()
+
+    targeted_patterns = {
+        "Patta-Holder Name": r"Name of the claimant\(s\):\s*(.+?)(?:\s+Claim ID:|\n|Father\s*/\s*Husband Name:)",
+        "Claim ID": r"Claim ID[:\-]?\s*([A-Z]{2,4}-[A-Z]{2,4}-\d+)",
+        "Village Name": r"Village[:\-]?\s*(.+?)(?:\s+3\.|\n)",
+        "Block": r"Tehsil/Taluka[:\-]?\s*(.+?)(?:\n|5\.)",
+        "District": r"District[:\-]?\s*([A-Za-z ]+?)(?:\s+State[:\-]|\s+Btate[:\-]|\n)",
+        "State": r"(?:State|Btate)[:\-]?\s*([A-Za-z ]+)",
+        "Claim Type": r"Claim Type[:\-]?\s*(IFR|CR|CFR)",
+        "Total Area Claimed": r"Total Area Claimed[:\-]?\s*([\d\.]+\s*[A-Za-z]+)",
+        "Land Use": r"Land Use[:\-]?\s*(.+?)(?:Date.*Application[:\-]|\n)",
+        "Date of Application": r"Date\w*\s*Application[:\-]?\s*([0-9]{4}\s*-\s*[0-9]{2}\s*-\s*[0-9]{1,2})",
+        "Water bodies": r"Water Bodies[:\-]?\s*(.+?)(?:Forest\s*Cove|Forest\s*cover|\n)",
+        "Forest cover": r"Forest\s*(?:Cove|cover)[:\-]?\s*(.+?)(?:Homestead[:\-]|\n)",
+        "Homestead": r"Homestead[:\-]?\s*([A-Za-z]+)",
+    }
+    for field, pattern in targeted_patterns.items():
         if not data.get(field) or data.get(field) == "":
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
@@ -175,17 +254,24 @@ def fetch_coordinates_from_address(address: str) -> str:
 # Main Cleaning
 # -------------------------
 def clean_with_llm(text: str) -> dict:
-    response = chain.invoke({"ocr_text": text})
-    data = safe_json_parse(response.content)
+    try:
+        response = chain.invoke({"ocr_text": text})
+        log_llm_output("OCR extraction response", response)
+        data = safe_json_parse(response)
+    except Exception as e:
+        print(f"LLM invocation failed during OCR cleanup: {e}")
+        data = {}
+
+    if "error" in data:
+        print("Falling back to regex extraction because Gemini output could not be repaired.")
+        data = {}
     data = fallback_extract(data, text)
 
     if "Total Area Claimed" in data and data["Total Area Claimed"]:
         data["Total Area Claimed"] = convert_area_to_acres(data["Total Area Claimed"])
 
-    # Try coordinates
     coords = data.get("Coordinates", "").strip()
     if not is_valid_coordinates(coords):
-        # Build full address
         full_address = ", ".join(
             filter(None, [
                 data.get("Address", ""),
@@ -196,15 +282,13 @@ def clean_with_llm(text: str) -> dict:
                 "India"
             ])
         )
-        print("📌 Full Address for geocoding:", full_address)
+        print("Full Address for geocoding:", full_address)
         new_coords = fetch_coordinates_from_address(full_address)
 
-        # If still empty, try District+State
         if not new_coords and data.get("District") and data.get("State"):
             alt_address = f"{data['District']}, {data['State']}, India"
             new_coords = fetch_coordinates_from_address(alt_address)
 
-        # If still empty, try pincode inside Address
         if not new_coords:
             pincode_match = re.search(r"\b\d{6}\b", full_address)
             if pincode_match:
@@ -214,6 +298,7 @@ def clean_with_llm(text: str) -> dict:
             data["Coordinates"] = new_coords
 
     return data
+
 
 # -------------------------
 # DSS Query Parsing

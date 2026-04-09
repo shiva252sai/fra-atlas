@@ -4,9 +4,9 @@ import Chatbot from "./Chatbot";
 
 const Layout = () => {
   return (
-    <div className="min-h-screen bg-background">
+    <div className="h-screen flex flex-col bg-background overflow-hidden">
       <Header />
-      <main>
+      <main className="flex-1 overflow-y-auto">
         <Outlet />
       </main>
       <Chatbot />
