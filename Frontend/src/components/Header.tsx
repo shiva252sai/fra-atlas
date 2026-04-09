@@ -7,7 +7,7 @@ import { useAuth } from "@/hooks/use-auth";
 const Header = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const location = useLocation();
-  const { isAuthenticated, logout } = useAuth();
+  const { isAuthenticated, logout, user } = useAuth();
 
   const navigation = [
     { name: "Atlas", href: "/atlas" },
@@ -35,7 +35,7 @@ const Header = () => {
 
           {/* Desktop Navigation */}
           <nav className="hidden md:flex items-center space-x-1">
-            {navigation.map((item) => (
+            {isAuthenticated && navigation.map((item) => (
               <Link
                 key={item.name}
                 to={item.href}
@@ -62,9 +62,12 @@ const Header = () => {
                 </Link>
               </>
             ) : (
-              <Button variant="outline" size="sm" onClick={logout}>
-                Logout
-              </Button>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">{user?.full_name || user?.email}</span>
+                <Button variant="outline" size="sm" onClick={logout}>
+                  Logout
+                </Button>
+              </div>
             )}
           </div>
 
@@ -84,7 +87,7 @@ const Header = () => {
         {isMenuOpen && (
           <div className="md:hidden pb-4">
             <div className="flex flex-col space-y-2">
-              {navigation.map((item) => (
+              {isAuthenticated && navigation.map((item) => (
                 <Link
                   key={item.name}
                   to={item.href}

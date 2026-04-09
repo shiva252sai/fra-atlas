@@ -1,34 +1,29 @@
 from typing import Optional
-import os
 
+from fastapi import APIRouter, Depends, Query
 import psycopg2
-from fastapi import APIRouter, Query
 
-from routers.dss_helpers import write_dss_log
-from utils.env_utils import load_backend_env
-
-load_backend_env()
-DATABASE_URL = os.getenv("DATABASE_URL")
+from db import get_db_connection
+from utils.api_utils import success_response
+from utils.auth_utils import require_roles
 
 router = APIRouter(prefix="/search", tags=["Search"])
 
 
-def get_db_connection():
-    return psycopg2.connect(DATABASE_URL)
-
-
 @router.get("/")
 async def search_claims(
-    q: Optional[str] = Query(None, description="General search query")
+    q: Optional[str] = Query(None, description="General search query"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    _: dict = Depends(require_roles("admin", "analyst")),
 ):
-    conn = get_db_connection()
-    cur = conn.cursor()
-
+    offset = (page - 1) * page_size
     base_query = "SELECT * FROM fra_documents WHERE 1=1"
-    params = []
+    count_query = "SELECT COUNT(*) FROM fra_documents WHERE 1=1"
+    params: list[object] = []
 
     if q:
-        base_query += """ AND (
+        clause = """ AND (
             patta_holder_name ILIKE %s OR
             village_name ILIKE %s OR
             district ILIKE %s OR
@@ -36,25 +31,17 @@ async def search_claims(
             claim_id ILIKE %s
         )"""
         like_q = f"%{q}%"
+        base_query += clause
+        count_query += clause
         params += [like_q] * 5
 
-    cur.execute(base_query, params)
-    rows = cur.fetchall()
-    columns = [desc[0] for desc in cur.description]
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(count_query, tuple(params))
+            total = cur.fetchone()[0]
+            cur.execute(f"{base_query} ORDER BY created_at DESC LIMIT %s OFFSET %s", tuple(params + [page_size, offset]))
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
 
     results = [dict(zip(columns, row)) for row in rows]
-
-    try:
-        write_dss_log(
-            user_query=q or "",
-            parsed={"status": None, "state": None, "district": None},
-            scheme_id=None,
-            count=len(results),
-            sample=results[:3],
-        )
-    except Exception as exc:
-        print("DSS log failed:", exc)
-
-    cur.close()
-    conn.close()
-    return {"count": len(results), "results": results}
+    return success_response(results, message="Search completed successfully", meta={"page": page, "page_size": page_size, "total": total})

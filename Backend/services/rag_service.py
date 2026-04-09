@@ -3,7 +3,6 @@ import math
 import os
 import re
 import hashlib
-from pathlib import Path
 from typing import Any
 
 from langchain_core.documents import Document
@@ -16,6 +15,7 @@ from pypdf import PdfReader
 from db import (
     fetch_schemes,
     get_fra_applicant_by_id,
+    get_latest_asset_data,
     get_scheme_by_name,
     insert_dss_document,
     list_fra_applicants,
@@ -23,15 +23,15 @@ from db import (
     update_dss_document_status,
     write_dss_log,
 )
+from settings import get_settings
 from services.scheme_service import find_eligible_people_by_scheme, matches_criteria
 from utils.env_utils import load_backend_env
 from utils.llm_utils import clean_llm_output, llm, parse_dss_query
 
 load_backend_env()
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-DSS_DOCS_DIR = BACKEND_ROOT / "data" / "dss_docs"
-DSS_INDEX_PATH = BACKEND_ROOT / "data" / "dss_index.json"
+settings = get_settings()
+DSS_DOCS_DIR = settings.dss_docs_dir
+DSS_INDEX_PATH = settings.dss_index_path
 
 KNOWN_SCHEME_HINTS = [
     {
@@ -523,6 +523,7 @@ def _build_structured_matches(filters: dict[str, Any]) -> tuple[dict[str, Any] |
 
 
 def _build_applicant_query(applicant: dict[str, Any], extra_prompt: str | None = None) -> str:
+    asset_data = get_latest_asset_data(applicant["id"]) if applicant.get("id") else None
     parts = [
         f"Recommend suitable government schemes for FRA patta holder {applicant.get('patta_holder_name') or 'applicant'}",
         f"in {applicant.get('village_name')}, {applicant.get('district')}, {applicant.get('state')}"
@@ -533,6 +534,9 @@ def _build_applicant_query(applicant: dict[str, Any], extra_prompt: str | None =
         f"water bodies: {applicant.get('water_bodies')}" if applicant.get("water_bodies") else None,
         f"homestead: {applicant.get('homestead')}" if applicant.get("homestead") else None,
         f"forest cover: {applicant.get('forest_cover')}" if applicant.get("forest_cover") else None,
+        f"satellite land type: {asset_data.get('land_type')}" if asset_data and asset_data.get("land_type") else None,
+        f"water availability detected: {'yes' if asset_data.get('water_available') else 'no'}" if asset_data and asset_data.get("water_available") is not None else None,
+        f"irrigation detected: {'yes' if asset_data.get('irrigation') else 'no'}" if asset_data and asset_data.get("irrigation") is not None else None,
         extra_prompt.strip() if extra_prompt else None,
     ]
     return ". ".join(part for part in parts if part)
@@ -553,6 +557,7 @@ def _get_structured_scheme_recommendations_for_applicant(applicant: dict[str, An
 def _merge_applicant_scheme_candidates(
     structured_schemes: list[dict[str, Any]],
     inferred_schemes: list[dict[str, Any]],
+    asset_boosts: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     for scheme in structured_schemes:
@@ -563,7 +568,42 @@ def _merge_applicant_scheme_candidates(
             current["score"] = max(current["score"], inferred["score"])
         else:
             merged[inferred["name"]] = inferred
+    for scheme_name, boost in (asset_boosts or {}).items():
+        entry = merged.setdefault(scheme_name, {"name": scheme_name, "score": 0, "source": "asset"})
+        entry["score"] += boost
     return sorted(merged.values(), key=lambda item: item["score"], reverse=True)[:5]
+
+
+def _infer_asset_scheme_boosts(applicant: dict[str, Any], asset_data: dict[str, Any] | None) -> dict[str, int]:
+    boosts: dict[str, int] = {}
+    claim_type = str(applicant.get("claim_type") or "").upper()
+    land_use = str(applicant.get("land_use") or "").lower()
+    water_bodies = str(applicant.get("water_bodies") or "").lower()
+    forest_cover = str(applicant.get("forest_cover") or "").lower()
+
+    if claim_type == "CFR" or "community forest" in land_use or "forest" in forest_cover:
+        boosts["Forest Rights Act Support"] = boosts.get("Forest Rights Act Support", 0) + 18
+        boosts["DAJGUA"] = boosts.get("DAJGUA", 0) + 10
+
+    if "agric" in land_use or claim_type == "IFR":
+        boosts["PM-KISAN"] = boosts.get("PM-KISAN", 0) + 12
+
+    if asset_data:
+        if asset_data.get("water_available") is False:
+            boosts["Jal Jeevan Mission"] = boosts.get("Jal Jeevan Mission", 0) + 18
+            boosts["MGNREGA"] = boosts.get("MGNREGA", 0) + 8
+        if asset_data.get("irrigation") is False and ("agric" in land_use or claim_type == "IFR"):
+            boosts["PMKSY"] = boosts.get("PMKSY", 0) + 22
+            boosts["MGNREGA"] = boosts.get("MGNREGA", 0) + 10
+        if str(asset_data.get("land_type") or "").lower() in {"forest", "herbaceousvegetation"}:
+            boosts["Forest Rights Act Support"] = boosts.get("Forest Rights Act Support", 0) + 10
+        if str(asset_data.get("land_type") or "").lower() in {"annualcrop", "permanentcrop", "pasture"}:
+            boosts["PM-KISAN"] = boosts.get("PM-KISAN", 0) + 10
+
+    if "seasonal" in water_bodies or "none" in water_bodies:
+        boosts["Jal Jeevan Mission"] = boosts.get("Jal Jeevan Mission", 0) + 8
+
+    return boosts
 
 
 def _build_applicant_recommendations(
@@ -572,9 +612,11 @@ def _build_applicant_recommendations(
     chunks: list[dict[str, Any]],
     structured_schemes: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    asset_data = get_latest_asset_data(applicant["id"]) if applicant.get("id") else None
     merged_schemes = _merge_applicant_scheme_candidates(
         structured_schemes,
         _infer_offline_schemes(query, chunks, None),
+        _infer_asset_scheme_boosts(applicant, asset_data),
     )
 
     recommendations = []
@@ -609,6 +651,7 @@ def _build_applicant_recommendations(
             "land_use": applicant.get("land_use"),
             "total_area_claimed": applicant.get("total_area_claimed"),
             "status": applicant.get("status"),
+            "asset_data": asset_data,
         },
         "matched_people_count": 1,
         "matched_people_preview": _sample_people([applicant], limit=1),
@@ -807,8 +850,8 @@ def run_hybrid_dss_query(
     }
 
 
-def get_available_applicants() -> list[dict[str, Any]]:
-    return list_fra_applicants()
+def get_available_applicants(page: int = 1, page_size: int = 100, search: str | None = None) -> tuple[list[dict[str, Any]], int]:
+    return list_fra_applicants(page=page, page_size=page_size, search=search)
 
 
 def run_applicant_dss_query(applicant_id: int, extra_prompt: str | None = None, top_k: int = 6) -> dict[str, Any]:

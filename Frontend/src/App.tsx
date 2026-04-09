@@ -29,8 +29,8 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Layout />}>
               <Route index element={<LandingPage />} />
-              <Route path="dashboard" element={<Dashboard />} />
               <Route element={<ProtectedRoute />}>
+                <Route path="dashboard" element={<Dashboard />} />
                 <Route path="atlas" element={<Atlas />} />
                 <Route path="upload" element={<Upload />} />
                 <Route path="support" element={<Support />} />

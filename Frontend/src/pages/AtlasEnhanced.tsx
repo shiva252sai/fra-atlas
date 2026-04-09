@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Circle, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { Circle, MapContainer, Marker, Polygon, Popup, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,24 +9,35 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Download, Eye, FilePenLine, Filter, Info, Layers3, MapPinned, RefreshCcw, Search, Trash2, ShieldCheck, ShieldAlert, History, Bot, ChevronUp, ChevronDown, Save, CheckCircle2, XCircle } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { apiFetch } from "@/lib/api";
 
 type ClaimType = "IFR" | "CR" | "CFR";
 type MappedFilter = "all" | "mapped" | "unmapped";
-type Claim = { id: number; patta_holder_name: string; father_or_husband_name: string; age: string; gender: string; address: string; village_name: string; block: string; district: string; state: string; total_area_claimed: string; coordinates: string; land_use: string; claim_id: string; claim_type: ClaimType; date_of_application: string; water_bodies: string; forest_cover: string; homestead: string; status: string; created_at?: string };
+type Claim = { id: number; patta_holder_name: string; father_or_husband_name: string; age: string; gender: string; address: string; village_name: string; block: string; district: string; state: string; total_area_claimed: string; coordinates: string; land_use: string; claim_id: string; claim_type: ClaimType; date_of_application: string; water_bodies: string; forest_cover: string; homestead: string; status: string; created_at?: string; geometry_geojson?: any; geometry_status?: string; area_acres?: number | null };
 type Filters = { query: string; state: string; district: string; village: string; claimType: string; status: string; mapped: MappedFilter };
 type LayersState = { ifr: boolean; cr: boolean; cfr: boolean; extent: boolean; villageZones: boolean; density: boolean; clustering: boolean };
 type ClusterGroup = { id: string; lat: number; lng: number; claims: Claim[] };
 type VillageGroup = { id: string; village_name: string; district: string; state: string; lat: number; lng: number; count: number };
 type Draft = Omit<Claim, "id" | "status" | "created_at">;
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
 const TYPE_META: Record<ClaimType, { color: string; shape: "circle" | "square" | "diamond" }> = { IFR: { color: "#16a34a", shape: "circle" }, CR: { color: "#2563eb", shape: "square" }, CFR: { color: "#7c3aed", shape: "diamond" } };
 const STATUS_COLORS: Record<string, string> = { pending: "#f59e0b", verified: "#16a34a", approved: "#2563eb", rejected: "#dc2626" };
 const DEFAULT_FILTERS: Filters = { query: "", state: "", district: "", village: "", claimType: "", status: "", mapped: "all" };
 const DEFAULT_LAYERS: LayersState = { ifr: true, cr: true, cfr: true, extent: true, villageZones: true, density: false, clustering: true };
 const emptyDraft = (c?: Claim | null): Draft => ({ patta_holder_name: c?.patta_holder_name || "", father_or_husband_name: c?.father_or_husband_name || "", age: c?.age || "", gender: c?.gender || "", address: c?.address || "", village_name: c?.village_name || "", block: c?.block || "", district: c?.district || "", state: c?.state || "", total_area_claimed: c?.total_area_claimed || "", coordinates: c?.coordinates || "", land_use: c?.land_use || "", claim_id: c?.claim_id || "", claim_type: c?.claim_type || "IFR", date_of_application: c?.date_of_application || "", water_bodies: c?.water_bodies || "", forest_cover: c?.forest_cover || "", homestead: c?.homestead || "" });
 const parseCoords = (v?: string): [number, number] | null => { if (!v) return null; const m = v.match(/-?\d+(?:\.\d+)?/g); if (!m || m.length < 2) return null; const lat = Number(m[0]); const lng = Number(m[1]); return Number.isNaN(lat) || Number.isNaN(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 ? null : [lat, lng]; };
-const normalize = (r: Record<string, unknown>): Claim => ({ id: Number(r.id || 0), patta_holder_name: String(r.patta_holder_name || ""), father_or_husband_name: String(r.father_or_husband_name || ""), age: String(r.age || ""), gender: String(r.gender || ""), address: String(r.address || ""), village_name: String(r.village_name || ""), block: String(r.block || ""), district: String(r.district || ""), state: String(r.state || ""), total_area_claimed: String(r.total_area_claimed || ""), coordinates: String(r.coordinates || ""), land_use: String(r.land_use || ""), claim_id: String(r.claim_id || ""), claim_type: (["IFR", "CR", "CFR"].includes(String(r.claim_type || "IFR").toUpperCase()) ? String(r.claim_type || "IFR").toUpperCase() : "IFR") as ClaimType, date_of_application: String(r.date_of_application || ""), water_bodies: String(r.water_bodies || ""), forest_cover: String(r.forest_cover || ""), homestead: String(r.homestead || ""), status: String(r.status || "pending").toLowerCase(), created_at: r.created_at ? String(r.created_at) : undefined });
+const parseGeometry = (geometry: any): [number, number][][] | null => {
+  const geo = geometry?.geometry || geometry;
+  if (!geo?.type || !geo?.coordinates) return null;
+  if (geo.type === "Polygon") {
+    return geo.coordinates.map((ring: [number, number][]) => ring.map((point) => [point[1], point[0]]));
+  }
+  if (geo.type === "MultiPolygon") {
+    return geo.coordinates[0]?.map((ring: [number, number][]) => ring.map((point) => [point[1], point[0]])) || null;
+  }
+  return null;
+};
+const normalize = (r: Record<string, unknown>): Claim => ({ id: Number(r.id || 0), patta_holder_name: String(r.patta_holder_name || ""), father_or_husband_name: String(r.father_or_husband_name || ""), age: String(r.age || ""), gender: String(r.gender || ""), address: String(r.address || ""), village_name: String(r.village_name || ""), block: String(r.block || ""), district: String(r.district || ""), state: String(r.state || ""), total_area_claimed: String(r.total_area_claimed || ""), coordinates: String(r.coordinates || ""), land_use: String(r.land_use || ""), claim_id: String(r.claim_id || ""), claim_type: (["IFR", "CR", "CFR"].includes(String(r.claim_type || "IFR").toUpperCase()) ? String(r.claim_type || "IFR").toUpperCase() : "IFR") as ClaimType, date_of_application: String(r.date_of_application || ""), water_bodies: String(r.water_bodies || ""), forest_cover: String(r.forest_cover || ""), homestead: String(r.homestead || ""), status: String(r.status || "pending").toLowerCase(), created_at: r.created_at ? String(r.created_at) : undefined, geometry_geojson: r.geometry_geojson, geometry_status: r.geometry_status ? String(r.geometry_status) : undefined, area_acres: r.area_acres ? Number(r.area_acres) : null });
 const badge = (s: string) => s === "verified" ? <Badge className="bg-green-600 text-white">Verified</Badge> : s === "approved" ? <Badge className="bg-blue-600 text-white">Approved</Badge> : s === "rejected" ? <Badge className="bg-red-600 text-white">Rejected</Badge> : <Badge className="bg-amber-500 text-white">Pending</Badge>;
 const areaRadius = (v: string) => { const n = Number.parseFloat(v); if (Number.isNaN(n) || n <= 0) return null; const t = v.toLowerCase(); const sqm = t.includes("hect") ? n * 10000 : t.includes("acre") ? n * 4046.86 : t.includes("sq") ? n : n * 4046.86; return Math.max(40, Math.sqrt(sqm / Math.PI)); };
 const clusterSize = (z: number) => z <= 5 ? 0.7 : z <= 7 ? 0.35 : z <= 9 ? 0.16 : 0.08;
@@ -40,7 +51,7 @@ const ClusterMarker = ({ cluster, onOpen }: { cluster: ClusterGroup; onOpen: (c:
 const popup = (claim: Claim) => <Popup><div className="w-72 space-y-2 text-sm"><div className="flex items-start justify-between gap-3"><div><p className="font-semibold text-slate-950">{claim.patta_holder_name || "Unnamed claim"}</p><p className="font-mono text-xs text-slate-500">{claim.claim_id || "No claim ID"}</p></div>{badge(claim.status)}</div><div className="grid grid-cols-2 gap-x-3 gap-y-1"><span className="text-slate-500">Claim Type</span><span>{claim.claim_type}</span><span className="text-slate-500">Village</span><span>{claim.village_name || "-"}</span><span className="text-slate-500">District</span><span>{claim.district || "-"}</span><span className="text-slate-500">State</span><span>{claim.state || "-"}</span><span className="text-slate-500">Area</span><span>{claim.total_area_claimed || "-"}</span><span className="text-slate-500">Land Use</span><span>{claim.land_use || "-"}</span><span className="text-slate-500">Application</span><span>{claim.date_of_application || "-"}</span></div></div></Popup>;
 const AtlasEnhanced = () => {
   const [claims, setClaims] = useState<Claim[]>([]); const [searchInput, setSearchInput] = useState(""); const [loading, setLoading] = useState(true); const [error, setError] = useState<string | null>(null); const [layers, setLayers] = useState<LayersState>(DEFAULT_LAYERS); const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS); const [zoom, setZoom] = useState(6); const [selectedId, setSelectedId] = useState<number | null>(null); const [draft, setDraft] = useState<Draft>(emptyDraft()); const [editing, setEditing] = useState(false); const [savingId, setSavingId] = useState<number | null>(null); const [deletingId, setDeletingId] = useState<number | null>(null); const [rerunId, setRerunId] = useState<number | null>(null); const [resetKey, setResetKey] = useState(0); const [chainStatus, setChainStatus] = useState<any>(null); const [auditLogs, setAuditLogs] = useState<any[] | null>(null); const [loadingAudit, setLoadingAudit] = useState(false); const [assetData, setAssetData] = useState<any | null>(null); const [loadingAsset, setLoadingAsset] = useState(false); const [showAssetModal, setShowAssetModal] = useState(false); const [tableCollapsed, setTableCollapsed] = useState(false); const [showLegend, setShowLegend] = useState(true);
-  const loadAll = async () => { try { setLoading(true); setError(null); const res = await fetch(`${BACKEND_URL}/upload/all`); if (!res.ok) throw new Error(`HTTP ${res.status}`); const data = await res.json(); const results = Array.isArray(data) ? data : data.results || []; setClaims(results.map((r: Record<string, unknown>) => normalize(r))); } catch (err) { console.error("Atlas load error:", err); setClaims([]); setError("Could not load Atlas records."); } finally { setLoading(false); } };
+  const loadAll = async () => { try { setLoading(true); setError(null); const data = await apiFetch(`/upload/all?page=1&page_size=500`); const results = Array.isArray(data.data) ? data.data : []; setClaims(results.map((r: Record<string, unknown>) => normalize(r))); } catch (err) { console.error("Atlas load error:", err); setClaims([]); setError("Could not load Atlas records."); } finally { setLoading(false); } };
   useEffect(() => { void loadAll(); }, []);
   const selected = useMemo(() => claims.find((c) => c.id === selectedId) || null, [claims, selectedId]);
   useEffect(() => { setDraft(emptyDraft(selected)); setEditing(false); }, [selected]);
@@ -55,13 +66,13 @@ const AtlasEnhanced = () => {
   const reset = () => { setFilters(DEFAULT_FILTERS); setSearchInput(""); setSelectedId(null); setResetKey((v) => v + 1); };
   const executeSearch = () => { setFilters((p) => ({ ...p, query: searchInput })); };
   const exportCsv = () => { const cols = ["id", "claim_id", "patta_holder_name", "claim_type", "village_name", "district", "state", "status", "coordinates", "total_area_claimed", "land_use", "date_of_application"]; const rows = filtered.map((c) => cols.map((f) => `"${String(c[f as keyof Claim] || "").replace(/"/g, '""')}"`).join(",")); const blob = new Blob([[cols.join(","), ...rows].join("\n")], { type: "text/csv;charset=utf-8;" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "atlas-visible-claims.csv"; a.click(); URL.revokeObjectURL(url); };
-  const exportGeoJson = () => { const features = mapped.map((c) => { const d = parseCoords(c.coordinates); return d ? { type: "Feature", geometry: { type: "Point", coordinates: [d[1], d[0]] }, properties: c } : null; }).filter(Boolean); const blob = new Blob([JSON.stringify({ type: "FeatureCollection", features }, null, 2)], { type: "application/geo+json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "atlas-visible-claims.geojson"; a.click(); URL.revokeObjectURL(url); };
-  const saveChanges = async () => { if (!selected) return; try { setSavingId(selected.id); const res = await fetch(`${BACKEND_URL}/upload/${selected.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) }); if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.detail || `HTTP ${res.status}`); } await loadAll(); setEditing(false); } catch (err) { console.error("Update error:", err); setError(err instanceof Error ? err.message : "Could not update record."); } finally { setSavingId(null); } };
-  const rerunCoords = async () => { if (!selected) return; try { setRerunId(selected.id); const res = await fetch(`${BACKEND_URL}/upload/preview`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...draft, coordinates: "" }) }); if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.detail || `HTTP ${res.status}`); } const data = await res.json(); setDraft(emptyDraft(normalize({ ...selected, ...data.data }))); } catch (err) { console.error("Coordinate rerun error:", err); setError(err instanceof Error ? err.message : "Could not regenerate coordinates."); } finally { setRerunId(null); } };
-  const deleteRecord = async () => { if (!selected) return; try { setDeletingId(selected.id); const res = await fetch(`${BACKEND_URL}/upload/${selected.id}`, { method: "DELETE" }); if (!res.ok) throw new Error(`HTTP ${res.status}`); setSelectedId(null); await loadAll(); } catch (err) { console.error("Delete error:", err); setError("Could not delete record."); } finally { setDeletingId(null); } };
-  const verifyIntegrity = async () => { try { setChainStatus({ status: "loading", message: "Verifying blockchain integrity..." }); const res = await fetch(`${BACKEND_URL}/upload/verify-chain`); if (!res.ok) throw new Error(`HTTP ${res.status}`); const data = await res.json(); setChainStatus(data); } catch (err) { setChainStatus({ status: "error", message: "Failed to connect to verification server." }); } };
-  const viewAuditHistory = async () => { if (!selected) return; try { setLoadingAudit(true); setAuditLogs([]); const res = await fetch(`${BACKEND_URL}/upload/${selected.id}/audit-history`); if (!res.ok) throw new Error("Failed"); const data = await res.json(); setAuditLogs(data.data || []); } catch (err) { console.error(err); setAuditLogs(null); } finally { setLoadingAudit(false); } };
-  const viewAssetIntelligence = async () => { if (!selected) return; try { setLoadingAsset(true); setShowAssetModal(true); const res = await fetch(`${BACKEND_URL}/upload/${selected.id}/assets?refresh=true`); if (!res.ok) throw new Error("Failed"); const data = await res.json(); setAssetData(data.data || { error: data.message }); } catch (err) { console.error(err); setAssetData({ error: "Failed to fetch asset data." }); } finally { setLoadingAsset(false); } };
+  const exportGeoJson = () => { const features = mapped.map((c) => { const d = parseCoords(c.coordinates); const geometry = c.geometry_geojson?.geometry || c.geometry_geojson || (d ? { type: "Point", coordinates: [d[1], d[0]] } : null); return geometry ? { type: "Feature", geometry, properties: c } : null; }).filter(Boolean); const blob = new Blob([JSON.stringify({ type: "FeatureCollection", features }, null, 2)], { type: "application/geo+json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "atlas-visible-claims.geojson"; a.click(); URL.revokeObjectURL(url); };
+  const saveChanges = async () => { if (!selected) return; try { setSavingId(selected.id); await apiFetch(`/upload/${selected.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) }); await loadAll(); setEditing(false); } catch (err) { console.error("Update error:", err); setError(err instanceof Error ? err.message : "Could not update record."); } finally { setSavingId(null); } };
+  const rerunCoords = async () => { if (!selected) return; try { setRerunId(selected.id); const data = await apiFetch(`/upload/preview`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...draft, coordinates: "" }) }); setDraft(emptyDraft(normalize({ ...selected, ...data.data }))); } catch (err) { console.error("Coordinate rerun error:", err); setError(err instanceof Error ? err.message : "Could not regenerate coordinates."); } finally { setRerunId(null); } };
+  const deleteRecord = async () => { if (!selected) return; try { setDeletingId(selected.id); await apiFetch(`/upload/${selected.id}`, { method: "DELETE" }); setSelectedId(null); await loadAll(); } catch (err) { console.error("Delete error:", err); setError("Could not delete record."); } finally { setDeletingId(null); } };
+  const verifyIntegrity = async () => { try { setChainStatus({ status: "loading", message: "Verifying blockchain integrity..." }); const data = await apiFetch(`/upload/verify-chain`); setChainStatus({ status: data.status, message: data.message, ...(data.data || {}) }); } catch (err) { setChainStatus({ status: "error", message: "Failed to connect to verification server." }); } };
+  const viewAuditHistory = async () => { if (!selected) return; try { setLoadingAudit(true); setAuditLogs([]); const data = await apiFetch(`/upload/${selected.id}/audit-history`); setAuditLogs(data.data || []); } catch (err) { console.error(err); setAuditLogs(null); } finally { setLoadingAudit(false); } };
+  const viewAssetIntelligence = async () => { if (!selected) return; try { setLoadingAsset(true); setShowAssetModal(true); const data = await apiFetch(`/upload/${selected.id}/assets?refresh=true`); setAssetData(data.data || { error: data.message }); } catch (err) { console.error(err); setAssetData({ error: "Failed to fetch asset data." }); } finally { setLoadingAsset(false); } };
   return (
     <div className="flex h-full w-full overflow-hidden bg-slate-100">
       <aside className="w-[340px] shrink-0 flex flex-col min-h-0 border-r border-slate-200 bg-white shadow-xl z-20 overflow-y-auto">
@@ -183,7 +194,7 @@ const AtlasEnhanced = () => {
                       </Button>
                     </div>
                     <Button size="sm" className="w-full text-xs bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/20" onClick={viewAssetIntelligence}>
-                      <Bot className="mr-1.5 h-4 w-4" /> AI Satellite Scan
+                      <Bot className="mr-1.5 h-4 w-4" /> Satellite Land-Cover Scan
                     </Button>
                   </div>
                 </div>
@@ -222,6 +233,10 @@ const AtlasEnhanced = () => {
             ))}
 
             {layers.extent && mapped.map((c) => {
+              const polygon = parseGeometry(c.geometry_geojson);
+              if (polygon) {
+                return <Polygon key={`poly-${c.id}`} positions={polygon} pathOptions={{ color: STATUS_COLORS[c.status] || '#ccc', weight: 2, fillOpacity: 0.12 }} />;
+              }
               const d = parseCoords(c.coordinates);
               const r = areaRadius(c.total_area_claimed);
               if (!d || !r) return null;
@@ -389,7 +404,7 @@ const AtlasEnhanced = () => {
            <div className="bg-emerald-50 text-emerald-950 rounded-2xl shadow-2xl w-[520px] flex flex-col overflow-hidden border border-emerald-200">
              <div className="p-4 border-b border-emerald-200 flex justify-between items-center bg-emerald-100/50">
                <div>
-                 <h2 className="text-base font-bold flex items-center gap-2 text-emerald-800"><Bot className="h-5 w-5 text-emerald-600" /> AI Satellite Resource Scan</h2>
+                 <h2 className="text-base font-bold flex items-center gap-2 text-emerald-800"><Bot className="h-5 w-5 text-emerald-600" /> Satellite Land-Cover Scan</h2>
                  <p className="text-[11px] text-emerald-600 mt-0.5 font-medium">Claim ID: <span className="font-mono bg-emerald-200/50 px-1.5 py-0.5 rounded">{selected?.claim_id || selected?.id}</span></p>
                </div>
                <button
@@ -427,7 +442,7 @@ const AtlasEnhanced = () => {
                      </div>
                      <div className="p-4 rounded-2xl bg-emerald-800 text-white shadow-md shadow-emerald-900/10 flex flex-col items-center text-center">
                        <p className="text-[10px] text-emerald-200 font-bold uppercase tracking-widest mb-1">Terrain Class</p>
-                       <p className="text-xl font-bold leading-tight mt-1">{assetData.land_type || "No Data"}</p>
+                       <p className="text-xl font-bold leading-tight mt-1">{assetData.land_cover_class || "No Data"}</p>
                        <Layers3 className="h-5 w-5 mt-3 opacity-40" />
                      </div>
                    </div>
@@ -451,14 +466,14 @@ const AtlasEnhanced = () => {
                      </div>
 
                      {/* Irrigation Card */}
-                     <div className={`flex items-center gap-4 p-4 rounded-2xl border transition-all ${assetData.irrigation ? 'bg-emerald-100 border-emerald-300 shadow-sm' : 'bg-white border-emerald-100 shadow-sm opacity-80'}`}>
-                       <div className={`p-3 rounded-xl ${assetData.irrigation ? 'bg-emerald-600 text-white' : 'bg-emerald-100 text-emerald-400'}`}>
-                         {assetData.irrigation ? <CheckCircle2 className="h-6 w-6" /> : <XCircle className="h-6 w-6" />}
+                     <div className={`flex items-center gap-4 p-4 rounded-2xl border transition-all ${assetData.irrigation_detected ? 'bg-emerald-100 border-emerald-300 shadow-sm' : 'bg-white border-emerald-100 shadow-sm opacity-80'}`}>
+                       <div className={`p-3 rounded-xl ${assetData.irrigation_detected ? 'bg-emerald-600 text-white' : 'bg-emerald-100 text-emerald-400'}`}>
+                         {assetData.irrigation_detected ? <CheckCircle2 className="h-6 w-6" /> : <XCircle className="h-6 w-6" />}
                        </div>
                        <div>
-                         <p className="text-sm font-bold text-emerald-900">{assetData.irrigation ? 'Agricultural Systems Detected' : 'No Irrigation Systems Found'}</p>
+                         <p className="text-sm font-bold text-emerald-900">{assetData.irrigation_detected ? 'Agricultural Systems Detected' : 'No Irrigation Systems Found'}</p>
                          <p className="text-xs text-emerald-700/70 mt-0.5 leading-relaxed">
-                           {assetData.irrigation 
+                           {assetData.irrigation_detected 
                              ? 'Detected geometric patterns consistent with sustained agricultural irrigation.' 
                              : 'Parcel appears to rely on seasonal rainfall or remains uncultivated forest land.'}
                          </p>

@@ -5,8 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+import { apiFetch } from "@/lib/api";
 const TRACKED_STATES = [
   "Chhattisgarh",
   "Madhya Pradesh",
@@ -38,9 +37,7 @@ const Dashboard = () => {
 
   const verifyIntegrity = async () => {
     try {
-      const res = await fetch(`${BACKEND_URL}/upload/verify-chain`);
-      if (!res.ok) throw new Error("Verification failed");
-      const data = await res.json();
+      const data = await apiFetch(`/upload/verify-chain`);
       setChainStatus(data.status);
       setChainMessage(data.message);
     } catch {
@@ -54,10 +51,8 @@ const Dashboard = () => {
       try {
         setLoading(true);
         setError(null);
-        const res = await fetch(`${BACKEND_URL}/upload/all`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const results = Array.isArray(data) ? data : data.results || [];
+        const data = await apiFetch(`/upload/all?page=1&page_size=500`);
+        const results = Array.isArray(data.data) ? data.data : [];
         setClaims(results);
       } catch (err) {
         console.error("Dashboard load error:", err);

@@ -6,8 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ArrowRight, Search, User } from "lucide-react";
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+import { apiFetch } from "@/lib/api";
 
 type Applicant = {
   id: number;
@@ -35,12 +34,8 @@ const Support = () => {
       try {
         setLoadingApplicants(true);
         setError(null);
-        const response = await fetch(`${BACKEND_URL}/dss/applicants`);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        const data = await response.json();
-        const rows = Array.isArray(data.applicants) ? data.applicants : [];
+        const data = await apiFetch(`/dss/applicants?page=1&page_size=500`);
+        const rows = Array.isArray(data.data) ? data.data : [];
         setApplicants(rows);
         if (rows.length > 0) {
           setSelectedApplicantId(String(rows[0].id));

@@ -8,6 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { apiFetch } from "@/lib/api";
 import {
   Check,
   Eye,
@@ -20,8 +21,6 @@ import {
   Upload as UploadIcon,
   X,
 } from "lucide-react";
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
 
 type DocumentFormData = {
   patta_holder_name: string;
@@ -247,16 +246,10 @@ const Upload = () => {
       const formData = new FormData();
       formData.append("file", file.fileObj);
 
-      const res = await fetch(`${BACKEND_URL}/upload/`, {
+      const raw = await apiFetch("/upload/", {
         method: "POST",
         body: formData,
       });
-
-      if (!res.ok) {
-        throw new Error("Document extraction failed");
-      }
-
-      const raw = await res.json();
       const normalized = normalizeKeys(raw.data);
 
       setFiles((prev) =>
@@ -289,45 +282,21 @@ const Upload = () => {
   };
 
   const saveDocument = async (payload: DocumentFormData) => {
-    const res = await fetch(`${BACKEND_URL}/upload/confirm`, {
+    const res = await apiFetch(`/upload/confirm`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-
-    if (!res.ok) {
-      let detail = "Save failed";
-      try {
-        const errorBody = await res.json();
-        detail = errorBody.detail || detail;
-      } catch {
-        // Ignore JSON parse errors and use generic message.
-      }
-      throw new Error(detail);
-    }
-
-    return res.json();
+    return res;
   };
 
   const previewDocument = async (payload: DocumentFormData) => {
-    const res = await fetch(`${BACKEND_URL}/upload/preview`, {
+    const res = await apiFetch(`/upload/preview`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-
-    if (!res.ok) {
-      let detail = "Preview failed";
-      try {
-        const errorBody = await res.json();
-        detail = errorBody.detail || detail;
-      } catch {
-        // Ignore JSON parse errors and use generic message.
-      }
-      throw new Error(detail);
-    }
-
-    return res.json();
+    return res;
   };
 
   const validateLocationFields = (data: DocumentFormData): FormErrors => {
@@ -409,7 +378,7 @@ const Upload = () => {
       setFiles((prev) =>
         prev.map((file) =>
           file.id === fileId
-            ? { ...file, status: "saved", extractedData: normalized, savedDocId: saved.doc_id }
+            ? { ...file, status: "saved", extractedData: normalized, savedDocId: saved.data.doc_id }
             : file
         )
       );
@@ -551,7 +520,7 @@ const Upload = () => {
       const saved = await saveDocument(manualPreview);
       const normalized = normalizeKeys(saved.data);
       setLastManualSaved({
-        docId: saved.doc_id,
+        docId: saved.data.doc_id,
         data: normalized,
       });
       setManualDraft(emptyDocument());
@@ -737,7 +706,7 @@ const Upload = () => {
                   <input
                     type="file"
                     multiple
-                    accept=".jpg,.jpeg,.png"
+                    accept=".jpg,.jpeg,.png,.pdf"
                     className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
                     onChange={(e) => e.target.files && void handleFiles(Array.from(e.target.files))}
                   />
@@ -746,8 +715,8 @@ const Upload = () => {
                       <UploadIcon className="h-10 w-10 text-sky-700" />
                     </div>
                     <div>
-                      <h3 className="text-xl font-semibold text-slate-900">Drop image files here</h3>
-                      <p className="text-sm text-slate-500">Supported formats: JPG, JPEG, PNG</p>
+                      <h3 className="text-xl font-semibold text-slate-900">Drop claim files here</h3>
+                      <p className="text-sm text-slate-500">Supported formats: JPG, JPEG, PNG, PDF</p>
                     </div>
                   </div>
                 </div>

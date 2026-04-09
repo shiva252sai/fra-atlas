@@ -6,8 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ArrowLeft, FileText, Lightbulb, MapPin, Sparkles } from "lucide-react";
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+import { apiFetch } from "@/lib/api";
 
 type Applicant = {
   id: number;
@@ -20,6 +19,12 @@ type Applicant = {
   land_use?: string;
   total_area_claimed?: string;
   status?: string;
+  asset_data?: {
+    land_type?: string;
+    water_available?: boolean;
+    irrigation?: boolean;
+    confidence?: number;
+  } | null;
 };
 
 type Citation = {
@@ -59,6 +64,11 @@ const getPriorityColor = (priority?: string) => {
   }
 };
 
+const getBooleanLabel = (value?: boolean | null) => {
+  if (value === undefined || value === null) return "-";
+  return value ? "Detected" : "Not detected";
+};
+
 const SupportDetail = () => {
   const navigate = useNavigate();
   const { applicantId } = useParams();
@@ -73,18 +83,12 @@ const SupportDetail = () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch(`${BACKEND_URL}/dss/applicants/${applicantId}/recommendations`, {
+      const payload = await apiFetch(`/dss/applicants/${applicantId}/recommendations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ note: (customNote ?? note.trim()) || null }),
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const data = (await response.json()) as ApplicantResponse;
-      setResult(data);
+      setResult(payload.data as ApplicantResponse);
     } catch (err) {
       console.error(err);
       setError("Could not load land details and recommendations for this record.");
@@ -101,7 +105,7 @@ const SupportDetail = () => {
     <div className="fra-container py-8">
       <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h1 className="text-3xl font-bold mb-2">Decision Support System</h1>
+          <h1 className="mb-2 text-3xl font-bold">Decision Support System</h1>
           <p className="text-muted-foreground">
             Step 2: land details and recommended schemes for the selected FRA record.
           </p>
@@ -195,6 +199,18 @@ const SupportDetail = () => {
                     {[result?.applicant_profile?.land_use, result?.applicant_profile?.total_area_claimed].filter(Boolean).join(" • ") || "-"}
                   </p>
                 </div>
+                <div className="rounded-lg border p-3 text-sm">
+                  <p className="text-muted-foreground">Satellite Land Type</p>
+                  <p className="font-medium">{result?.applicant_profile?.asset_data?.land_type || "-"}</p>
+                </div>
+                <div className="rounded-lg border p-3 text-sm">
+                  <p className="text-muted-foreground">Water Availability</p>
+                  <p className="font-medium">{getBooleanLabel(result?.applicant_profile?.asset_data?.water_available)}</p>
+                </div>
+                <div className="rounded-lg border p-3 text-sm">
+                  <p className="text-muted-foreground">Irrigation</p>
+                  <p className="font-medium">{getBooleanLabel(result?.applicant_profile?.asset_data?.irrigation)}</p>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -239,7 +255,7 @@ const SupportDetail = () => {
                 <CardHeader>
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <CardTitle className="text-lg flex items-center gap-2">
+                      <CardTitle className="flex items-center gap-2 text-lg">
                         <Lightbulb className="h-5 w-5 text-warning" />
                         {recommendation.scheme}
                       </CardTitle>
@@ -263,7 +279,7 @@ const SupportDetail = () => {
 
                   {recommendation.supporting_sources?.length ? (
                     <div className="space-y-3">
-                      <h4 className="font-medium flex items-center gap-2">
+                      <h4 className="flex items-center gap-2 font-medium">
                         <FileText className="h-4 w-4" />
                         Supporting Sources
                       </h4>
