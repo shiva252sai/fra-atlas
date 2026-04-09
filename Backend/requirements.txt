@@ -11,6 +11,7 @@ pytesseract
 langchain
 langchain-google-genai
 python-dotenv
+pypdf
 
 # --- Database ---
 psycopg2-binary          # PostgreSQL driver

@@ -312,35 +312,49 @@ Rules:
 2. If any field is missing, return null.
 3. Output ONLY valid JSON. No explanation, no markdown.
 
+Question:
+{user_query}
+
 Example:
 Question: Who is eligible for Farm Support Scheme in Bhimganga?
 Answer:
-{
+{{
   "scheme": "Farm Support Scheme",
   "village": "Bhimganga",
   "district": null,
   "state": null
-}
+}}
 
 Question: List all people in Mandla eligible for Old Age Pension.
 Answer:
-{
+{{
   "scheme": "Old Age Pension",
   "village": "Mandla",
   "district": null,
   "state": null
-}
+}}
 """
 
 
 dss_prompt = PromptTemplate.from_template(DSS_PROMPT)
 dss_chain: Runnable = dss_prompt | llm | StrOutputParser()
 
+INDIAN_STATES = {
+    "andhra pradesh", "arunachal pradesh", "assam", "bihar", "chhattisgarh",
+    "goa", "gujarat", "haryana", "himachal pradesh", "jharkhand", "karnataka",
+    "kerala", "madhya pradesh", "maharashtra", "manipur", "meghalaya",
+    "mizoram", "nagaland", "odisha", "punjab", "rajasthan", "sikkim",
+    "tamil nadu", "telangana", "tripura", "uttar pradesh", "uttarakhand",
+    "west bengal",
+}
+
+PLACE_STOP_WORDS = (" with ", " for ", " based ", " having ", " where ", " needing ", " who ")
+
 def parse_dss_query(user_query: str) -> Dict[str, Any]:
     result = {"scheme": None, "village": None, "district": None, "state": None}
 
     try:
-        llm_out = dss_chain.invoke(user_query)
+        llm_out = dss_chain.invoke({"user_query": user_query})
         parsed = json.loads(llm_out)
 
         for key in result.keys():
@@ -348,12 +362,21 @@ def parse_dss_query(user_query: str) -> Dict[str, Any]:
                 result[key] = parsed[key]
 
     except Exception as e:
-        print("⚠️ LLM parse failed, fallback:", e)
+        print("LLM parse failed, fallback:", e)
 
         # Regex fallback for village
-        m = re.search(r"in ([A-Za-z]+)", user_query)
+        m = re.search(r"\bin\s+([A-Za-z ]+?)(?:[?.!,]|$)", user_query)
         if m:
-            result["village"] = m.group(1)
+            place = f" {m.group(1).strip()} "
+            for marker in PLACE_STOP_WORDS:
+                if marker in place.lower():
+                    place = place[:place.lower().index(marker)]
+                    break
+            place = place.strip()
+            if place.lower() in INDIAN_STATES:
+                result["state"] = place
+            else:
+                result["village"] = place
 
         # Match scheme from DB
         schemes = fetch_schemes()
@@ -390,5 +413,5 @@ def geocode_village_with_llm(village: str, district: str, state: str) -> str:
         if data.get("lat") is not None and data.get("lon") is not None:
             return f"{float(data['lat']):.6f}, {float(data['lon']):.6f}"
     except Exception as e:
-        print("⚠️ LLM Geocoding fallback error:", e)
+        print("LLM geocoding fallback error:", e)
     return ""

@@ -1,6 +1,5 @@
 import { Outlet } from "react-router-dom";
 import Header from "./Header";
-import Chatbot from "./Chatbot";
 
 const Layout = () => {
   return (
@@ -9,7 +8,6 @@ const Layout = () => {
       <main className="flex-1 overflow-y-auto">
         <Outlet />
       </main>
-      <Chatbot />
     </div>
   );
 };

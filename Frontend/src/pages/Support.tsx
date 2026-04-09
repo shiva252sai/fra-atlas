@@ -1,298 +1,197 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
-import { 
-  Lightbulb, 
-  TrendingUp, 
-  Users, 
-  Droplets,
-  Zap,
-  Home,
-  ArrowRight,
-  MapPin,
-  AlertTriangle,
-  CheckCircle2
-} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ArrowRight, Search, User } from "lucide-react";
+
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+
+type Applicant = {
+  id: number;
+  patta_holder_name?: string;
+  village_name?: string;
+  district?: string;
+  state?: string;
+  claim_id?: string;
+  claim_type?: string;
+  land_use?: string;
+  total_area_claimed?: string;
+  status?: string;
+};
 
 const Support = () => {
-  // Mock recommendation data
-  const villageRecommendations = [
-    {
-      village: "Koraput Village",
-      district: "Koraput",
-      state: "Odisha",
-      population: 1250,
-      fraStatus: "65% verified",
-      waterIndex: 0.3,
-      recommendations: [
-        {
-          scheme: "Jal Jeevan Mission",
-          priority: "High",
-          reason: "Low water access index",
-          benefit: "Piped water supply",
-          eligibility: 95,
-          icon: Droplets,
-        },
-        {
-          scheme: "PM Awas Yojana",
-          priority: "Medium", 
-          reason: "Housing infrastructure gap",
-          benefit: "Housing assistance ₹1.2L",
-          eligibility: 80,
-          icon: Home,
-        },
-        {
-          scheme: "MGNREGA",
-          priority: "High",
-          reason: "Employment opportunities",
-          benefit: "100 days guaranteed work",
-          eligibility: 100,
-          icon: Users,
-        },
-      ],
-    },
-    {
-      village: "Bastar Block",
-      district: "Bastar",
-      state: "Chhattisgarh",
-      population: 2100,
-      fraStatus: "78% verified",
-      waterIndex: 0.7,
-      recommendations: [
-        {
-          scheme: "PM Solar Panel",
-          priority: "High",
-          reason: "Forest area - ideal for solar",
-          benefit: "Free solar installation",
-          eligibility: 90,
-          icon: Zap,
-        },
-        {
-          scheme: "Forest Conservation",
-          priority: "Medium",
-          reason: "CFR area development", 
-          benefit: "Conservation incentives",
-          eligibility: 85,
-          icon: TrendingUp,
-        },
-      ],
-    },
-  ];
+  const navigate = useNavigate();
+  const [applicants, setApplicants] = useState<Applicant[]>([]);
+  const [selectedApplicantId, setSelectedApplicantId] = useState<string>("");
+  const [search, setSearch] = useState("");
+  const [loadingApplicants, setLoadingApplicants] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const schemeCategories = [
-    {
-      title: "Water & Sanitation",
-      count: 12,
-      schemes: ["Jal Jeevan Mission", "Swachh Bharat Mission", "PMAY Water Component"],
-      color: "bg-tribal",
-    },
-    {
-      title: "Housing & Infrastructure",
-      count: 8,
-      schemes: ["PM Awas Yojana", "Rural Housing Scheme", "Infrastructure Development"],
-      color: "bg-success",
-    },
-    {
-      title: "Employment & Livelihood",
-      count: 15,
-      schemes: ["MGNREGA", "PM-KISAN", "Rural Livelihood Mission"],
-      color: "bg-warning",
-    },
-    {
-      title: "Forest & Environment",
-      count: 6,
-      schemes: ["Forest Conservation", "Green India Mission", "Biodiversity Conservation"],
-      color: "bg-forest",
-    },
-  ];
+  useEffect(() => {
+    const loadApplicants = async () => {
+      try {
+        setLoadingApplicants(true);
+        setError(null);
+        const response = await fetch(`${BACKEND_URL}/dss/applicants`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        const rows = Array.isArray(data.applicants) ? data.applicants : [];
+        setApplicants(rows);
+        if (rows.length > 0) {
+          setSelectedApplicantId(String(rows[0].id));
+        }
+      } catch (err) {
+        console.error(err);
+        setError("Could not load FRA records from the backend.");
+      } finally {
+        setLoadingApplicants(false);
+      }
+    };
 
-  const getPriorityColor = (priority: string) => {
-    switch (priority.toLowerCase()) {
-      case 'high':
-        return 'bg-destructive text-destructive-foreground';
-      case 'medium':
-        return 'bg-warning text-warning-foreground';
-      case 'low':
-        return 'bg-success text-success-foreground';
-      default:
-        return 'bg-muted text-muted-foreground';
-    }
-  };
+    void loadApplicants();
+  }, []);
+
+  const filteredApplicants = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return applicants;
+    return applicants.filter((applicant) =>
+      [
+        applicant.claim_id,
+        applicant.patta_holder_name,
+        applicant.claim_type,
+        applicant.village_name,
+        applicant.district,
+        applicant.state,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query)),
+    );
+  }, [applicants, search]);
+
+  const selectedApplicant = useMemo(
+    () => applicants.find((applicant) => String(applicant.id) === selectedApplicantId) || null,
+    [applicants, selectedApplicantId],
+  );
 
   return (
     <div className="fra-container py-8">
-      {/* Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-2">Decision Support System</h1>
         <p className="text-muted-foreground">
-          AI-powered recommendations for government schemes based on FRA data and village characteristics
+          Step 1: select the FRA record first. After that, the next page will open with land details and recommended schemes for that individual record.
         </p>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-        {schemeCategories.map((category, index) => (
-          <Card key={index} className="hover-lift">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className={`w-10 h-10 ${category.color} rounded-lg flex items-center justify-center`}>
-                  <Lightbulb className="h-5 w-5 text-white" />
-                </div>
-                <Badge variant="secondary">{category.count}</Badge>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <h3 className="font-semibold mb-2">{category.title}</h3>
-              <div className="space-y-1">
-                {category.schemes.slice(0, 2).map((scheme, i) => (
-                  <p key={i} className="text-xs text-muted-foreground">• {scheme}</p>
-                ))}
-                {category.schemes.length > 2 && (
-                  <p className="text-xs text-muted-foreground">
-                    +{category.schemes.length - 2} more
-                  </p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* Village Recommendations */}
-      <div className="space-y-8">
-        <div className="flex items-center justify-between">
-          <h2 className="text-2xl font-bold">Village-wise Recommendations</h2>
-          <Button variant="outline">
-            <MapPin className="h-4 w-4 mr-2" />
-            View on Map
-          </Button>
-        </div>
-
-        {villageRecommendations.map((village, index) => (
-          <Card key={index} className="overflow-hidden">
-            <CardHeader className="bg-gradient-card">
-              <div className="flex items-start justify-between">
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <MapPin className="h-5 w-5" />
-                    {village.village}
-                  </CardTitle>
-                  <CardDescription>
-                    {village.district}, {village.state} • Population: {village.population.toLocaleString()}
-                  </CardDescription>
-                </div>
-                <div className="text-right">
-                  <Badge className="status-verified mb-2">{village.fraStatus}</Badge>
-                  <p className="text-sm text-muted-foreground">
-                    Water Index: {village.waterIndex.toFixed(1)}/1.0
-                  </p>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="p-6">
-              <div className="grid gap-4">
-                <h4 className="font-semibold text-lg flex items-center gap-2">
-                  <Lightbulb className="h-5 w-5 text-warning" />
-                  Recommended Schemes
-                </h4>
-                
-                <div className="grid gap-4">
-                  {village.recommendations.map((rec, recIndex) => (
-                    <div key={recIndex} className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors">
-                      <div className="flex items-start space-x-4">
-                        <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
-                          <rec.icon className="h-5 w-5 text-primary" />
-                        </div>
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h5 className="font-medium">{rec.scheme}</h5>
-                            <Badge className={getPriorityColor(rec.priority)}>
-                              {rec.priority} Priority
-                            </Badge>
-                          </div>
-                          <p className="text-sm text-muted-foreground mb-2">{rec.reason}</p>
-                          <p className="text-sm font-medium text-success">{rec.benefit}</p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="flex items-center gap-2 mb-2">
-                          <CheckCircle2 className="h-4 w-4 text-success" />
-                          <span className="text-sm font-medium">{rec.eligibility}% match</span>
-                        </div>
-                        <Button size="sm" variant="outline">
-                          View Details
-                          <ArrowRight className="h-3 w-3 ml-1" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="flex items-center justify-between pt-4 border-t">
-                  <div className="flex items-center text-sm text-muted-foreground">
-                    <AlertTriangle className="h-4 w-4 mr-2" />
-                    Recommendations updated based on latest FRA data
-                  </div>
-                  <Button variant="hero" size="sm">
-                    Generate Report
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* AI Insights */}
-      <Card className="mt-8 bg-gradient-card">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5" />
-            AI Insights & Patterns
-          </CardTitle>
-          <CardDescription>
-            Machine learning insights from FRA and scheme data
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid md:grid-cols-2 gap-6">
-            <div>
-              <h4 className="font-medium mb-3">Key Findings</h4>
-              <ul className="space-y-2 text-sm">
-                <li className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-success" />
-                  Villages with 70%+ FRA verification show higher scheme adoption
-                </li>
-                <li className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-success" />
-                  Water access schemes have 85% success rate in tribal areas
-                </li>
-                <li className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-success" />
-                  Combined FRA+MGNREGA shows improved livelihood outcomes
-                </li>
-              </ul>
+      <div className="grid gap-8 lg:grid-cols-[1.3fr,0.7fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <User className="h-5 w-5" />
+              Select Record
+            </CardTitle>
+            <CardDescription>
+              {loadingApplicants ? "Loading saved FRA records..." : `${filteredApplicants.length} matching records`}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="relative max-w-lg">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by claim ID, applicant, village, district..."
+                className="pl-9"
+              />
             </div>
-            <div>
-              <h4 className="font-medium mb-3">Trending Opportunities</h4>
-              <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm">Solar energy schemes</span>
-                  <Badge variant="outline">+15%</Badge>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm">Digital literacy programs</span>
-                  <Badge variant="outline">+22%</Badge>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm">Organic farming initiatives</span>
-                  <Badge variant="outline">+18%</Badge>
+
+            {error && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+
+            <Card className="overflow-hidden">
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Claim ID</TableHead>
+                      <TableHead>Applicant</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Village</TableHead>
+                      <TableHead className="w-[120px]">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredApplicants.map((applicant) => {
+                      const isSelected = String(applicant.id) === selectedApplicantId;
+                      return (
+                        <TableRow key={applicant.id} data-state={isSelected ? "selected" : undefined}>
+                          <TableCell className="font-mono text-xs">{applicant.claim_id || "-"}</TableCell>
+                          <TableCell className="font-medium">{applicant.patta_holder_name || "-"}</TableCell>
+                          <TableCell>{applicant.claim_type || "-"}</TableCell>
+                          <TableCell>{applicant.village_name || "-"}</TableCell>
+                          <TableCell>
+                            <Button
+                              size="sm"
+                              variant={isSelected ? "default" : "outline"}
+                              onClick={() => setSelectedApplicantId(String(applicant.id))}
+                            >
+                              {isSelected ? "Selected" : "Select"}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </CardContent>
+        </Card>
+
+        <Card className="h-fit">
+          <CardHeader>
+            <CardTitle>Selected Record</CardTitle>
+            <CardDescription>
+              Confirm the applicant you want to analyze before moving to the next page.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {selectedApplicant ? (
+              <div className="rounded-xl border bg-muted/40 p-4 space-y-2 text-sm">
+                <p className="font-semibold">{selectedApplicant.patta_holder_name}</p>
+                <p className="text-muted-foreground">
+                  {[selectedApplicant.village_name, selectedApplicant.district, selectedApplicant.state].filter(Boolean).join(", ")}
+                </p>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  {selectedApplicant.claim_id && <Badge variant="outline">{selectedApplicant.claim_id}</Badge>}
+                  {selectedApplicant.claim_type && <Badge variant="outline">{selectedApplicant.claim_type}</Badge>}
+                  {selectedApplicant.total_area_claimed && <Badge variant="secondary">{selectedApplicant.total_area_claimed}</Badge>}
                 </div>
               </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+            ) : (
+              <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+                Select a record from the table to continue.
+              </div>
+            )}
+
+            <Button
+              className="w-full"
+              disabled={!selectedApplicantId}
+              onClick={() => navigate(`/support/${selectedApplicantId}`)}
+            >
+              Enter
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 };

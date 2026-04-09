@@ -9,6 +9,7 @@ import Dashboard from "./pages/Dashboard";
 import Atlas from "./pages/AtlasEnhanced";
 import Upload from "./pages/Upload";
 import Support from "./pages/Support";
+import SupportDetail from "./pages/SupportDetail";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { AuthProvider } from "@/hooks/use-auth";
@@ -32,8 +33,9 @@ const App = () => (
               <Route element={<ProtectedRoute />}>
                 <Route path="atlas" element={<Atlas />} />
                 <Route path="upload" element={<Upload />} />
+                <Route path="support" element={<Support />} />
+                <Route path="support/:applicantId" element={<SupportDetail />} />
               </Route>
-              <Route path="support" element={<Support />} />
               <Route path="login" element={<Login />} />
               <Route path="signup" element={<Signup />} />
             </Route>

@@ -1,139 +1,190 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useEffect, useMemo, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
+import { Label } from "@/components/ui/label";
 import {
-  MessageCircle,
-  Send,
-  X,
-  Minimize2,
-  Maximize2,
-  User,
+  ArrowLeft,
+  ArrowRight,
   Bot,
-  HelpCircle,
   FileText,
-  Map,
-  Users
+  Lightbulb,
+  Loader2,
+  MapPin,
+  MessageCircle,
+  Search,
+  Sparkles,
+  User,
+  X,
 } from "lucide-react";
 
-interface Message {
-  id: string;
-  text: string;
-  sender: 'user' | 'bot';
-  timestamp: Date;
-  type?: 'text' | 'suggestion' | 'data';
-}
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+
+type Applicant = {
+  id: number;
+  patta_holder_name?: string;
+  village_name?: string;
+  district?: string;
+  state?: string;
+  claim_id?: string;
+  claim_type?: string;
+  land_use?: string;
+  total_area_claimed?: string;
+  status?: string;
+};
+
+type Citation = {
+  source?: string;
+  page?: number;
+  snippet?: string;
+};
+
+type Recommendation = {
+  scheme: string;
+  priority?: string;
+  reason?: string;
+  eligibility_note?: string;
+  supporting_sources?: Citation[];
+};
+
+type ApplicantResponse = {
+  status: string;
+  summary?: string;
+  applicant_profile?: Applicant;
+  recommended_schemes?: Recommendation[];
+  source_count?: number;
+  knowledge_base_status?: string;
+  retrieval_error?: string | null;
+};
+
+const getPriorityStyles = (priority?: string) => {
+  switch ((priority || "").toLowerCase()) {
+    case "high":
+      return {
+        badge: "bg-red-100 text-red-700 border-red-200",
+        rail: "bg-red-500",
+      };
+    case "medium":
+      return {
+        badge: "bg-amber-100 text-amber-700 border-amber-200",
+        rail: "bg-amber-500",
+      };
+    case "low":
+      return {
+        badge: "bg-emerald-100 text-emerald-700 border-emerald-200",
+        rail: "bg-emerald-500",
+      };
+    default:
+      return {
+        badge: "bg-muted text-muted-foreground border-border",
+        rail: "bg-slate-400",
+      };
+  }
+};
 
 const Chatbot = () => {
   const [isOpen, setIsOpen] = useState(false);
-  const [isMinimized, setIsMinimized] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      text: 'Hello! I\'m your FRA Atlas assistant. I can help you with Forest Rights Act processes, data queries, and scheme recommendations. What would you like to know?',
-      sender: 'bot',
-      timestamp: new Date(),
-    }
-  ]);
-  const [inputValue, setInputValue] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const quickActions = [
-    { icon: HelpCircle, text: 'FRA Process Help', action: 'fra-help' },
-    { icon: FileText, text: 'Check Claim Status', action: 'claim-status' },
-    { icon: Map, text: 'Find Village Data', action: 'village-data' },
-    { icon: Users, text: 'Scheme Recommendations', action: 'schemes' },
-  ];
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  const [records, setRecords] = useState<Applicant[]>([]);
+  const [selectedRecordId, setSelectedRecordId] = useState<string>("");
+  const [contextNote, setContextNote] = useState("");
+  const [searchValue, setSearchValue] = useState("");
+  const [result, setResult] = useState<ApplicantResponse | null>(null);
+  const [loadingRecords, setLoadingRecords] = useState(false);
+  const [loadingRecommendations, setLoadingRecommendations] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState<1 | 2>(1);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (!isOpen) return;
 
-  const handleSendMessage = async (text?: string, action?: string) => {
-    const messageText = text || inputValue.trim();
-    if (!messageText) return;
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      text: messageText,
-      sender: 'user',
-      timestamp: new Date(),
+    const loadRecords = async () => {
+      try {
+        setLoadingRecords(true);
+        setError(null);
+        const response = await fetch(`${BACKEND_URL}/dss/applicants`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        const rows = Array.isArray(data.applicants) ? data.applicants : [];
+        setRecords(rows);
+        if (!selectedRecordId && rows.length > 0) {
+          setSelectedRecordId(String(rows[0].id));
+        }
+      } catch (err) {
+        console.error(err);
+        setError("Could not load saved FRA records.");
+      } finally {
+        setLoadingRecords(false);
+      }
     };
 
-    setMessages(prev => [...prev, userMessage]);
-    setInputValue('');
-    setIsTyping(true);
+    void loadRecords();
+  }, [isOpen]);
+
+  const filteredRecords = useMemo(() => {
+    const query = searchValue.trim().toLowerCase();
+    if (!query) return records;
+    return records.filter((record) =>
+      [
+        record.patta_holder_name,
+        record.claim_id,
+        record.claim_type,
+        record.village_name,
+        record.district,
+        record.state,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query)),
+    );
+  }, [records, searchValue]);
+
+  const selectedRecord = useMemo(
+    () => records.find((record) => String(record.id) === selectedRecordId) || null,
+    [records, selectedRecordId],
+  );
+
+  const loadRecommendations = async (recordId: string, noteOverride?: string) => {
+    if (!recordId) return;
 
     try {
-      const response = await fetch(
-        `${BACKEND_URL}/dss/check?q=${encodeURIComponent(messageText)}`,
-        { method: "GET" }
-      );
+      setLoadingRecommendations(true);
+      setError(null);
+      const response = await fetch(`${BACKEND_URL}/dss/applicants/${recordId}/recommendations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: (noteOverride ?? contextNote.trim()) || null }),
+      });
 
       if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+        throw new Error(`HTTP ${response.status}`);
       }
 
-      let data;
-      const contentType = response.headers.get("content-type");
-      if (contentType && contentType.includes("application/json")) {
-        const json = await response.json();
-        data = JSON.stringify(json);
-      } else {
-        data = await response.text();
-      }
-
-      const botMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: data,
-        sender: 'bot',
-        timestamp: new Date(),
-      };
-
-      setMessages(prev => [...prev, botMessage]);
-    } catch (error) {
-      console.error(error);
-      const botMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: "❌ Sorry, I couldn't reach the server. Please check if the backend is running at http://127.0.0.1:8000/dss/check",
-        sender: 'bot',
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, botMessage]);
+      const data = (await response.json()) as ApplicantResponse;
+      setResult(data);
+      setStep(2);
+    } catch (err) {
+      console.error(err);
+      setError("Could not generate recommendations for the selected record.");
+      setResult(null);
     } finally {
-      setIsTyping(false);
+      setLoadingRecommendations(false);
     }
   };
 
-  const handleInputKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
-    }
-  };
-
-  const tryParseJSON = (text: string) => {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return null;
-    }
+  const handleEnter = async () => {
+    if (!selectedRecordId) return;
+    await loadRecommendations(selectedRecordId);
   };
 
   if (!isOpen) {
     return (
-      <div className="fixed bottom-4 right-4 z-[9999] mb-2">
+      <div className="fixed bottom-5 right-5 z-[9999]">
         <Button
           onClick={() => setIsOpen(true)}
           size="lg"
-          className="rounded-full h-14 w-14 shadow-interactive animate-pulse-glow"
+          className="h-14 w-14 rounded-2xl shadow-interactive"
           variant="hero"
         >
           <MessageCircle className="h-6 w-6" />
@@ -143,171 +194,360 @@ const Chatbot = () => {
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-[9999]">
-      <Card className={`w-96 shadow-elevated transition-all duration-300 ${isMinimized ? 'h-16' : 'h-[500px]'
-        }`}>
-        {/* Header */}
-        <CardHeader className="pb-3 border-b">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <div className="w-8 h-8 bg-gradient-accent rounded-full flex items-center justify-center">
-                <Bot className="h-4 w-4 text-accent-foreground" />
+    <div className="fixed inset-0 z-[9999] bg-slate-950/25 backdrop-blur-[2px]">
+      <div className="ml-auto flex h-full w-full max-w-[1100px] flex-col bg-background shadow-2xl">
+        <div className="border-b bg-[linear-gradient(135deg,hsl(210_40%_99%),hsl(158_35%_97%))]">
+          <div className="flex items-start justify-between gap-4 px-6 py-6 lg:px-8">
+            <div className="flex items-start gap-4">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-accent shadow-card">
+                <Bot className="h-6 w-6 text-accent-foreground" />
               </div>
-              <div>
-                <CardTitle className="text-sm">FRA Assistant</CardTitle>
-                <CardDescription className="text-xs">Always here to help</CardDescription>
+              <div className="space-y-2">
+                <div>
+                  <h2 className="text-3xl font-bold tracking-tight">FRA Assistant</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Record-specific decision support for individual FRA property holders
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  <Badge variant={step === 1 ? "default" : "outline"}>1. Select Record</Badge>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+                  <Badge variant={step === 2 ? "default" : "outline"}>2. Land Details & Schemes</Badge>
+                </div>
               </div>
             </div>
-            <div className="flex space-x-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsMinimized(!isMinimized)}
-              >
-                {isMinimized ? (
-                  <Maximize2 className="h-4 w-4" />
-                ) : (
-                  <Minimize2 className="h-4 w-4" />
-                )}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsOpen(false)}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+            <Button variant="ghost" size="sm" onClick={() => setIsOpen(false)} className="mt-1">
+              <X className="h-4 w-4" />
+            </Button>
           </div>
-        </CardHeader>
+        </div>
 
-        {!isMinimized && (
-          <>
-            {/* Messages */}
-            <CardContent className="h-80 overflow-y-auto p-4 space-y-4">
-              {messages.map((message) => {
-                const parsed = tryParseJSON(message.text);
-                return (
-                  <div
-                    key={message.id}
-                    className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+        <div className="flex-1 overflow-auto bg-[linear-gradient(180deg,hsl(210_40%_99%),hsl(0_0%_100%))] px-6 py-6 lg:px-8">
+          {error && (
+            <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          {step === 1 && (
+            <div className="mx-auto max-w-5xl space-y-6">
+              <Card className="border-0 shadow-card">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-2xl">
+                    <User className="h-5 w-5 text-primary" />
+                    Select FRA Record
+                  </CardTitle>
+                  <CardDescription className="text-base">
+                    Choose the exact FRA record first. After you click Enter, the next page will load the land details and scheme recommendations for that individual applicant.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <div className="relative max-w-xl">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={searchValue}
+                      onChange={(e) => setSearchValue(e.target.value)}
+                      placeholder="Search by claim ID, applicant, village, district..."
+                      className="h-12 pl-9 bg-white"
+                    />
+                  </div>
+
+                  {loadingRecords ? (
+                    <div className="flex items-center justify-center py-20 text-muted-foreground">
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Loading saved FRA records...
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      {filteredRecords.map((record) => {
+                        const isSelected = String(record.id) === selectedRecordId;
+                        return (
+                          <button
+                            key={record.id}
+                            type="button"
+                            onClick={() => setSelectedRecordId(String(record.id))}
+                            className={`rounded-3xl border p-5 text-left transition-all ${
+                              isSelected
+                                ? "border-primary bg-white shadow-elevated ring-2 ring-primary/15"
+                                : "bg-white/90 hover:bg-white hover:shadow-card"
+                            }`}
+                          >
+                            <div className="mb-4 flex items-start justify-between gap-3">
+                              <div>
+                                <p className="text-lg font-semibold">{record.patta_holder_name || "Unknown applicant"}</p>
+                                <p className="mt-1 font-mono text-xs text-muted-foreground">{record.claim_id || "No claim ID"}</p>
+                              </div>
+                              <Badge variant="outline" className={isSelected ? "border-primary text-primary" : ""}>
+                                {record.claim_type || "Record"}
+                              </Badge>
+                            </div>
+                            <div className="space-y-2 text-sm text-muted-foreground">
+                              <p>{record.village_name || "Unknown village"}</p>
+                              <p>{[record.district, record.state].filter(Boolean).join(", ") || "Location unavailable"}</p>
+                              {record.land_use && <p>{record.land_use}</p>}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {!loadingRecords && !filteredRecords.length && (
+                    <Card className="border-dashed">
+                      <CardContent className="py-12 text-center text-sm text-muted-foreground">
+                        No records match your search.
+                      </CardContent>
+                    </Card>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border-0 shadow-card">
+                <CardContent className="flex flex-col gap-4 p-6 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-sm uppercase tracking-[0.18em] text-muted-foreground">Selected Record</p>
+                    <p className="mt-2 text-xl font-semibold">
+                      {selectedRecord?.patta_holder_name || "Choose a record to continue"}
+                    </p>
+                    {selectedRecord && (
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {[selectedRecord.claim_id, selectedRecord.claim_type, selectedRecord.village_name].filter(Boolean).join(" • ")}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    onClick={() => void handleEnter()}
+                    disabled={!selectedRecordId || loadingRecommendations}
+                    className="h-12 min-w-40"
                   >
-                    <div
-                      className={`flex items-start space-x-2 max-w-[80%] ${message.sender === 'user' ? 'flex-row-reverse space-x-reverse' : ''
-                        }`}
-                    >
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center ${message.sender === 'user'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-muted text-muted-foreground'
-                        }`}>
-                        {message.sender === 'user' ? <User className="h-3 w-3" /> : <Bot className="h-3 w-3" />}
-                      </div>
-                      <div
-                        className={`rounded-lg px-3 py-2 text-sm ${message.sender === 'user'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-muted text-muted-foreground'
-                          }`}
-                      >
-                        {parsed && parsed.results ? (
-                          <div className="space-y-2">
-                            <p className="font-semibold text-accent">
-                              📑 Scheme: {parsed.scheme || "N/A"} ({parsed.count} records)
-                            </p>
+                    {loadingRecommendations ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Loading...
+                      </>
+                    ) : (
+                      <>
+                        Enter
+                        <ArrowRight className="ml-2 h-4 w-4" />
+                      </>
+                    )}
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
+          )}
 
-                            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                              {parsed.results.map((person: any, idx: number) => (
-                                <div
-                                  key={idx}
-                                  className="border rounded-md p-2 bg-background text-xs shadow-sm"
-                                >
-                                  <p className="font-semibold">
-                                    👤 {person.patta_holder_name || "Unknown"} ({person.gender}, {person.age} yrs)
-                                  </p>
-                                  <p>👨‍👩 Father/Husband: {person.father_or_husband_name}</p>
-                                  <p>🏡 Address: {person.address}</p>
-                                  <p>
-                                    📍 {person.village_name}, {person.block}, {person.district}, {person.state}
-                                  </p>
-                                  <p>🌱 Land Use: {person.land_use} ({person.total_area_claimed})</p>
-                                  <p>📌 Coordinates: {person.coordinates}</p>
-                                  <p>🆔 Claim ID: {person.claim_id} | Survey: {person.survey_number}</p>
-                                  <p>🌳 Forest Cover: {person.forest_cover} | 💧 Water: {person.water_bodies}</p>
-                                  <p>🏠 Homestead: {person.homestead}</p>
-                                  <p>👨‍👩‍👧 Family Size: {person.family_size}</p>
-                                  <p>📞 {person.phone} | Aadhaar: {person.aadhaar}</p>
-                                  <p>🗓️ Applied: {person.date_of_application} | Verified: {person.verification_date}</p>
-                                  <p>📄 Status: {person.status} ({person.type})</p>
+          {step === 2 && (
+            <div className="mx-auto max-w-6xl space-y-6">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-2xl font-semibold">Land Details & Recommended Schemes</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Recommendations are generated using the selected FRA record and indexed policy documents.
+                  </p>
+                </div>
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={() => setStep(1)}>
+                    <ArrowLeft className="mr-2 h-4 w-4" />
+                    Back
+                  </Button>
+                  <Button onClick={() => void loadRecommendations(selectedRecordId)} disabled={loadingRecommendations}>
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    {loadingRecommendations ? "Refreshing..." : "Refresh"}
+                  </Button>
+                </div>
+              </div>
 
-                                  {person.schemes?.length > 0 && (
-                                    <p>✅ Schemes: {person.schemes.join(", ")}</p>
-                                  )}
-                                  {person.documents?.length > 0 && (
-                                    <p>📂 Documents: {person.documents.join(", ")}</p>
+              <Card className="border-0 shadow-card overflow-hidden">
+                <CardHeader className="bg-[linear-gradient(135deg,hsl(158_48%_18%),hsl(210_85%_40%))] text-white">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <CardTitle className="text-2xl text-white">
+                        {result?.applicant_profile?.patta_holder_name || selectedRecord?.patta_holder_name || "Selected Record"}
+                      </CardTitle>
+                      <CardDescription className="mt-2 text-slate-100">
+                        {[selectedRecord?.village_name, selectedRecord?.district, selectedRecord?.state].filter(Boolean).join(", ")}
+                      </CardDescription>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedRecord?.claim_id && (
+                        <Badge className="border-white/25 bg-white/15 text-white hover:bg-white/15">
+                          {selectedRecord.claim_id}
+                        </Badge>
+                      )}
+                      {selectedRecord?.claim_type && (
+                        <Badge className="border-white/25 bg-white/15 text-white hover:bg-white/15">
+                          {selectedRecord.claim_type}
+                        </Badge>
+                      )}
+                      {result?.knowledge_base_status && (
+                        <Badge className="border-white/25 bg-white/15 text-white hover:bg-white/15">
+                          KB: {result.knowledge_base_status}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-5 p-6">
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    {result?.summary || "The selected FRA record is being used to generate scheme recommendations for this individual beneficiary."}
+                  </p>
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-2xl border bg-slate-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Claim ID</p>
+                      <p className="mt-2 font-mono text-sm font-semibold">{selectedRecord?.claim_id || "-"}</p>
+                    </div>
+                    <div className="rounded-2xl border bg-slate-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Village</p>
+                      <p className="mt-2 text-sm font-semibold">{selectedRecord?.village_name || "-"}</p>
+                    </div>
+                    <div className="rounded-2xl border bg-slate-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">District / State</p>
+                      <p className="mt-2 text-sm font-semibold">
+                        {[selectedRecord?.district, selectedRecord?.state].filter(Boolean).join(", ") || "-"}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border bg-slate-50 p-4">
+                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Land / Area</p>
+                      <p className="mt-2 text-sm font-semibold">
+                        {[selectedRecord?.land_use, selectedRecord?.total_area_claimed].filter(Boolean).join(" • ") || "-"}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-0 shadow-card">
+                <CardHeader>
+                  <CardTitle className="text-lg">Optional context for this applicant</CardTitle>
+                  <CardDescription>
+                    Add a specific need if you want the recommendations to focus on something like irrigation, housing, or livelihood support.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4 md:flex-row">
+                  <div className="flex-1">
+                    <Label htmlFor="fra-context-page2" className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                      Context
+                    </Label>
+                    <Input
+                      id="fra-context-page2"
+                      value={contextNote}
+                      onChange={(e) => setContextNote(e.target.value)}
+                      placeholder="Example: prioritize irrigation and livelihood support"
+                      className="mt-2"
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <Button onClick={() => void loadRecommendations(selectedRecordId)} disabled={loadingRecommendations} className="h-10">
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Apply Context
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h4 className="text-xl font-semibold">Recommended Schemes</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Suggestions tailored to the selected land record.
+                    </p>
+                  </div>
+                  <Badge variant="outline">
+                    {result?.recommended_schemes?.length || 0} schemes
+                  </Badge>
+                </div>
+
+                {loadingRecommendations && (
+                  <Card className="border-dashed">
+                    <CardContent className="flex items-center justify-center py-10 text-muted-foreground">
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Refreshing recommendations...
+                    </CardContent>
+                  </Card>
+                )}
+
+                {result?.recommended_schemes?.length ? (
+                  <div className="grid gap-4">
+                    {result.recommended_schemes.map((recommendation, index) => {
+                      const priorityStyles = getPriorityStyles(recommendation.priority);
+                      return (
+                        <Card key={`${recommendation.scheme}-${index}`} className="overflow-hidden border-0 shadow-card">
+                          <div className={`h-1.5 ${priorityStyles.rail}`} />
+                          <CardContent className="p-0">
+                            <div className="grid gap-0 lg:grid-cols-[1.1fr,0.9fr]">
+                              <div className="p-6">
+                                <div className="flex items-start justify-between gap-4">
+                                  <div>
+                                    <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                                      <Lightbulb className="h-3.5 w-3.5" />
+                                      Recommendation
+                                    </div>
+                                    <h5 className="text-2xl font-semibold">{recommendation.scheme}</h5>
+                                  </div>
+                                  <Badge className={priorityStyles.badge}>
+                                    {recommendation.priority || "Info"}
+                                  </Badge>
+                                </div>
+                                {recommendation.reason && (
+                                  <p className="mt-4 text-base leading-7 text-muted-foreground">
+                                    {recommendation.reason}
+                                  </p>
+                                )}
+                                {recommendation.eligibility_note && (
+                                  <div className="mt-5 rounded-2xl bg-slate-50 p-4 text-sm leading-6">
+                                    <span className="font-semibold text-foreground">Why this fits:</span>{" "}
+                                    <span className="text-muted-foreground">{recommendation.eligibility_note}</span>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="border-t bg-slate-50/80 p-6 lg:border-l lg:border-t-0">
+                                <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
+                                  <FileText className="h-4 w-4 text-primary" />
+                                  Policy citations
+                                </div>
+                                <div className="space-y-3">
+                                  {recommendation.supporting_sources?.length ? (
+                                    recommendation.supporting_sources.map((source, sourceIndex) => (
+                                      <div key={`${source.source}-${sourceIndex}`} className="rounded-2xl border bg-white p-4">
+                                        <p className="text-sm font-semibold">
+                                          {source.source || "Policy document"}
+                                          {source.page ? ` • Page ${source.page}` : ""}
+                                        </p>
+                                        {source.snippet && (
+                                          <p className="mt-2 text-sm leading-6 text-muted-foreground">{source.snippet}</p>
+                                        )}
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <div className="rounded-2xl border border-dashed bg-white p-4 text-sm text-muted-foreground">
+                                      No citation snippets available for this recommendation.
+                                    </div>
                                   )}
                                 </div>
-                              ))}
+                              </div>
                             </div>
-                          </div>
-                        ) : (
-                          <p className="whitespace-pre-wrap">{message.text}</p>
-                        )}
-
-                        <p className="text-xs opacity-70 mt-1">
-                          {message.timestamp.toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
-                        </p>
-                      </div>
-                    </div>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
                   </div>
-                );
-              })}
-
-              {isTyping && (
-                <div className="flex justify-start">
-                  <div className="flex items-center space-x-2">
-                    <div className="w-6 h-6 bg-muted rounded-full flex items-center justify-center">
-                      <Bot className="h-3 w-3" />
-                    </div>
-                    <div className="bg-muted rounded-lg px-3 py-2">
-                      <div className="flex space-x-1">
-                        <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" />
-                        <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce delay-100" />
-                        <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce delay-200" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
-            </CardContent>
-
-            {/* Input */}
-            <div className="border-t p-3">
-              <div className="flex items-center space-x-2">
-                <Input
-                  ref={inputRef}
-                  placeholder="Ask about FRA processes, claims, or schemes..."
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  onKeyPress={handleInputKeyPress}
-                  className="flex-1 h-10"
-                />
-                <Button
-                  onClick={() => handleSendMessage()}
-                  disabled={!inputValue.trim() || isTyping}
-                  size="sm"
-                  className="h-10 w-10 flex items-center justify-center"
-                >
-                  <Send className="h-4 w-4" />
-                </Button>
+                ) : (
+                  !loadingRecommendations && (
+                    <Card className="border-dashed bg-white/80">
+                      <CardContent className="py-16 text-center text-muted-foreground">
+                        No recommendations were generated for this record yet.
+                      </CardContent>
+                    </Card>
+                  )
+                )}
               </div>
             </div>
-          </>
-        )}
-      </Card>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
