@@ -278,3 +278,32 @@ def parse_dss_query(user_query: str) -> Dict[str, Any]:
                 break
 
     return result
+
+# -------------------------
+# LLM Geographic Fallback
+# -------------------------
+GEOCODE_PROMPT = """
+You are an expert geography API. Calculate the rough GPS coordinates for the center of the following village in India:
+Village: {village}
+District: {district}
+State: {state}
+
+Respond ONLY with a valid JSON containing "lat" and "lon" as floats. Do not include markdown or blockticks.
+If you genuinely cannot find or confidently estimate it, return {{"lat": null, "lon": null}}.
+"""
+
+geocode_prompt = PromptTemplate.from_template(GEOCODE_PROMPT)
+geocode_chain: Runnable = geocode_prompt | llm | StrOutputParser()
+
+def geocode_village_with_llm(village: str, district: str, state: str) -> str:
+    if not village:
+        return ""
+    try:
+        raw_resp = geocode_chain.invoke({"village": village, "district": district, "state": state})
+        cleaned = raw_resp.strip().replace("```json", "").replace("```", "")
+        data = json.loads(cleaned)
+        if data.get("lat") is not None and data.get("lon") is not None:
+            return f"{float(data['lat']):.6f}, {float(data['lon']):.6f}"
+    except Exception as e:
+        print("⚠️ LLM Geocoding fallback error:", e)
+    return ""

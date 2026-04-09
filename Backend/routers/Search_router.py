@@ -17,10 +17,7 @@ def get_db_connection():
 
 @router.get("/")
 async def search_claims(
-    q: Optional[str] = Query(None, description="General search query"),
-    status: Optional[str] = Query(None, description="Filter by claim status"),
-    state: Optional[str] = Query(None, description="Filter by state"),
-    district: Optional[str] = Query(None, description="Filter by district"),
+    q: Optional[str] = Query(None, description="General search query")
 ):
     conn = get_db_connection()
     cur = conn.cursor()
@@ -39,18 +36,6 @@ async def search_claims(
         like_q = f"%{q}%"
         params += [like_q] * 5
 
-    if status:
-        base_query += " AND status ILIKE %s"
-        params.append(f"%{status}%")
-
-    if state:
-        base_query += " AND state ILIKE %s"
-        params.append(f"%{state}%")
-
-    if district:
-        base_query += " AND district ILIKE %s"
-        params.append(f"%{district}%")
-
     cur.execute(base_query, params)
     rows = cur.fetchall()
     columns = [desc[0] for desc in cur.description]
@@ -61,7 +46,7 @@ async def search_claims(
     try:
         write_dss_log(
             user_query=q or "",
-            parsed={"status": status, "state": state, "district": district},
+            parsed={"status": None, "state": None, "district": None},
             scheme_id=None,
             count=len(results),
             sample=results[:3],

@@ -229,3 +229,44 @@ def predict(claim: Claim):
 # Simple root
 def root():
     return {"status": "ok", "note": "POST /predict with claim JSON to run the pipeline."}
+
+# ---------------- HELPER FUNCTION ----------------
+def get_asset_data(coords_str: str):
+    """
+    Takes a coordinate string (e.g., 'lat, lon'), builds an AOI polygon, 
+    fetches the satellite image via EE, and passes it through the CNN to extract land type.
+    Maps land type to water_available & irrigation rules.
+    Returns: (land_type, confidence, water_available, irrigation)
+    """
+    try:
+        lat, lon = parse_coordinate(coords_str)
+        # using a default 500 sqm area to generate a generic sampling polygon
+        square_coords = make_square_polygon(lat, lon, 500.0)
+        
+        # Pull Earth Engine view
+        thumb_url = fetch_satellite_thumbnail(square_coords)
+        pil_img = download_image_from_url(thumb_url)
+        
+        # Analyze with CNN
+        arr = preprocess_for_model(pil_img, size=IMG_SIZE)
+        pred = predict_with_model(arr)
+        
+        land_type = pred.get("class", "Unknown")
+        confidence = pred.get("confidence", 0.0)
+        
+        # Mapping logic
+        if land_type in ["AnnualCrop", "PermanentCrop"]:
+            water_available = False
+            irrigation = False
+        elif land_type in ["River", "SeaLake"]:
+            water_available = True
+            irrigation = True
+        else:
+            water_available = True
+            irrigation = False
+            
+        return land_type, confidence, water_available, irrigation
+
+    except Exception as e:
+        print(f"Error in get_asset_data helper: {e}")
+        return "Unknown", 0.0, False, False

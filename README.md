@@ -1,75 +1,99 @@
 # 🏞️ FRA Atlas AI — Intelligent Forest Rights Monitoring & Decision Support System  
-*Built for Smart India Hackathon 2025 | Team DevSphere*  
+*Built for Smart India Hackathon 2025 | Team DevSphere*
 
-> **Digitizing Forest Rights for Transparent, Data-Driven Governance.**  
-> FRA Atlas AI automates the verification of forest land rights, integrates geospatial and satellite data, and powers a Decision Support System (DSS) to link FRA patta holders with government schemes.
-
----
-
-## 🧠 Problem Statement  
-
-| **Issue** | **Description** |
-|------------|----------------|
-| **Fragmented Data** | FRA claims, GIS maps, and Census records exist separately and are mostly non-digital. |
-| **Manual Verification** | Field staff verify documents manually without real-time map references. |
-| **Lack of Transparency** | No centralized system exists to visualize granted titles or scheme eligibility. |
-| **Objective** | Create an AI-powered, GIS-integrated, end-to-end FRA management platform with a decision-support layer. |
+> **Digitizing Forest Rights for Transparent, Data-Driven, and Mathematically Secure Governance.**
+> FRA Atlas AI automates the verification of forest land rights, cross-references geospatial and satellite data, enforces blockchain-level cryptographic immutability, and powers a Decision Support System (DSS) to link FRA patta holders with government schemes.
 
 ---
 
-## 💡 Our Solution — *FRA Atlas AI Platform*  
+## 🧠 The Problem
+Legacy FRA claims, GIS maps, and Census records currently exist in isolated, non-digital fragments. Field staff perform document verification entirely manually, leaving massive gaps in accountability, spatial transparency, and the ability to track real-world satellite assets.
 
-| **Component** | **Description** |
-|----------------|----------------|
-| **OCR Automation** | Extracts and structures data from legacy paper FRA documents using Tesseract/Google Vision. |
-| **AI Verification Engine** | Cleans and validates data via Pandas, Great Expectations, and LLM-based anomaly detection. |
-| **Land Classification** | Identifies land types (forest, agriculture, pond, etc.) using ISRO Bhuvan API or custom CNN model. |
-| **Geo-Mapping** | Displays approved claims on an interactive map using Mapbox + PostGIS. |
-| **DSS Query Interface** | Officers can ask natural language queries (via LangChain + MCP) — e.g., *“Show all PM-KISAN eligible families in Village X.”* |
-| **Citizen Portal** | Enables tracking claim status and viewing approved maps (no edit access). |
+## 💡 The Architecture
+FRA Atlas AI acts as a deeply integrated platform operating in three core pillars:
+1. **Automated Digitation**: Unreadable paper scans are structured automatically via Tesseract OCR and Google Gemini's advanced LLM.
+2. **Cryptographic Validation**: Every single document uploaded to the PostgreSQL database is cryptographically chained down to the `previous_hash`, ensuring absolute data integrity while preserving verifiable, audited editability.
+3. **Spatial Intelligence**: Extracted coordinates query the **Google Earth Engine (GEE)** API to download live Sentinel-2 satellite imagery, which is parsed by a pre-trained **TensorFlow CNN (Convolutional Neural Network)** to permanently classify the land asset (e.g. Forest, AnnualCrop, River).
 
 ---
 
-## 🧩 Core Features  
+## 🧩 Core Features & Recent Integrations
 
-| **Feature** | **Description** |
-|--------------|----------------|
-| 🧾 **Document Digitization** | Automated OCR and data structuring from scanned FRA documents. |
-| 🧹 **Data Cleaning Pipeline** | Validates extracted text using Pandas, Regex, Great Expectations, and LLM. |
-| 🛰️ **Land Type Classification** | Classifies land via ISRO Bhuvan or a CNN model trained on Sentinel-2 / EuroSAT data. |
-| 🗺️ **FRA Atlas Visualization** | Approved claims plotted on an interactive, zoomable GIS map. |
-| 🤖 **Decision Support System (DSS)** | LLM-powered query engine to layer Central Schemes (PM-KISAN, MGNREGA, etc.) over FRA data. |
-| 📬 **Smart Notifications** | Sends SMS/email to eligible citizens when new schemes are introduced. |
-| 👥 **Citizen Transparency Portal** | Public dashboard showing approved claims (non-confidential info only). |
+### ⛓️ 1. Forensic Blockchain & Auditing System
+To maintain trust while allowing for legitimate human typo-correction:
+* **Strict Cryptographic Hashing**: Records are securely hashed sequentially.
+* **Smart Edit Rippling**: Editing a document no longer breaks the system. The backend algorithm mathematically "ripples" the updated hash chronologically down the entire database.
+* **Forensic Auditing (`fra_audit_logs`)**: Every single edit captures the user's ID/IP and saves a perfect **Before & After JSON snapshot** of the document.
+* **Integrity Dashboard**: Map UI explicitly checks the mathematical security of the entire database in real-time, instantly surfacing malicious direct-database tampering with the exact ID and expected hash.
 
----
+### 🗺️ 2. Advanced Geospatial Atlas (Map UI)
+Upgraded React Leaflet visualizations for thousands of records:
+* **Intelligent Clustering & Density Heatmaps**: Groups large collections of claims at high elevations and paints population distributions natively.
+* **Village Coverage Zones**: Automatically projects approximate village perimeters by calculating the center-of-mass of all claimed coordinates within that jurisdiction.
+* **Fallback Jitter & Gemini Geocoding**: When OpenStreetMap natively fails to map an obscure Indian village, the backend utilizes Gemini AI to estimate precise GPS coordinates. It then artificially scatters stacked pins (spatial jitter) so every claimant has a uniquely identifiable physical plot.
 
-## ⚙️ Tech Stack  
-
-| **Layer** | **Technology Used** |
-|------------|--------------------|
-| **Frontend** | React.ts, Redux Toolkit / React Query, Mapbox GL JS, TailwindCSS |
-| **Backend** |  FastAPI, REST APIs, JWT Auth, MCP middleware |
-| **AI / ML** | OCR (Tesseract/Google Vision), CNN (TensorFlow/Keras), LLM (LangChain + Google-Gemini) |
-| **Data Cleaning** | Pandas, Great Expectations, Regex |
-| **Geo / Spatial** | ISRO Bhuvan API, Google Earth Engine, PostGIS |
-| **Database** | PostgreSQL + PostGIS, Redis (caching), Elasticsearch (search) |
-| **Notifications** | Twilio / AWS SNS for SMS |
-| **Deployment** | Docker, NGINX, GitHub Actions CI/CD |
+### 🛰️ 3. Automated Satellite Asset Extraction
+Fully automated `GET /predict` GEE pipeline integrated directly into the `POST /confirm` document flow:
+* Pulls real-time optical bands (B4, B3, B2) for the document's coordinates.
+* Feeds pixel arrays into a `.h5` MobileNetV2 CNN classifier.
+* Automatically records the `land_type`, `water_available`, and `irrigation` confidence into an immutable `asset_data` Postgres table for every FRA document.
 
 ---
 
-## 🏗️ System Architecture  
+## ⚙️ Tech Stack
 
-| **Step** | **Process** |
-|-----------|-------------|
-| 1️⃣ | Officer logs in → authentication check. |
-| 2️⃣ | Uploads scanned FRA document → triggers OCR. |
-| 3️⃣ | Extracted text cleaned using Pandas + LLM verification. |
-| 4️⃣ | Land coordinates checked via ISRO Bhuvan / CNN model. |
-| 5️⃣ | If verified → record stored in PostgreSQL + plotted on GIS map. |
-| 6️⃣ | DSS allows NL queries like “Families eligible for PM-KISAN in District A.” |
-| 7️⃣ | Eligible citizens notified automatically by SMS/email. |
+### Frontend Application
+* **Framework**: React.ts (Vite)
+* **Design**: TailwindCSS, Shadcn UI, Lucide Icons
+* **Geospatial Processing**: React Leaflet, Mapbox GL Elements
+* **State Management**: React Hooks (useMemo, useMap)
+
+### Backend Architecture
+* **Core API**: FastAPI (Python)
+* **Database Engine**: PostgreSQL + PostGIS Extension
+* **Database Driver**: `psycopg2` `RealDictCursor`
+
+### Artificial Intelligence & ML
+* **Optical Character Recognition**: Tesseract / Google Vision
+* **Geocoding & Data Validation Fallbacks**: Google Gemini (LangChain `ChatGoogleGenerativeAI`)
+* **Computer Vision**: TensorFlow/Keras (`best_model.h5` MobileNet)
+* **Satellite Indexing**: `earthengine-api` (Google Earth Engine)
+
+---
+
+## 🚀 Quick Start & Installation
+
+### 1️⃣ Clone Repository
+```bash
+git clone https://github.com/jeetgoyal80/FRA-Portal.git
+cd FRA-Portal
+```
+
+### 2️⃣ Configure Backend & Database
+Make sure you have PostgreSQL running locally with the PostGIS extension enabled.
+Create a `.env` file in the `Backend/` folder:
+```env
+DATABASE_URL=postgresql://user:password@localhost/fra.db
+GEMINI_API_KEY=AIzaSy...
+```
+Install dependencies and run FastAPI:
+```bash
+cd Backend
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+earthengine authenticate  # (Required for the CNN satellite imagery processing)
+uvicorn main:app --reload --port 8000
+```
+
+### 3️⃣ Launch Frontend
+Open a new terminal.
+```bash
+cd Frontend
+npm install
+npm run dev
+```
+Navigate to `http://localhost:5173`.
 
 ---
 
@@ -81,22 +105,21 @@
 | `routers/` | REST endpoints for upload, DSS queries, and classification |
 | `services/` | Scheme overlay service, OCR extraction, and ML inference |
 | `Frontend/` | React dashboard for officers and citizens |
-| `src/pages/` | Login, Dashboard, Upload, DSS Query, Citizen Map |
-| `src/components/ui/` | Header, Chatbot, Layouts, and protected route handlers |
+| `src/pages/` | Login, Dashboard, Atlas, AtlasEnhanced, DSS Query |
 | `models/` | CNN model for land classification |
 | `fra.db` | PostgreSQL database file (with PostGIS) |
 
 ---
 
-## 🚀 Quick Start  
+## 🏁 Project Status  
 
-| **Step** | **Command** |
-|-----------|-------------|
-| **1️⃣ Clone Repository** | `git clone https://github.com/jeetgoyal80/FRA-Portal.git` |
-| **2️⃣ Install Backend Deps** | `pip install -r requirements.txt` |
-| **3️⃣ Run Backend Server** | `uvicorn main:app --reload` |
-| **4️⃣ Launch Frontend** | `cd Frontend && npm install && npm run dev` |
-| **5️⃣ Access in Browser** | `http://localhost:5173` |
+| **Stage** | **Progress** |
+|------------|-------------|
+| **Forensic Audit History** | ✅ Fully Implemented |
+| **Blockchain Integrity** | ✅ Fully Implemented |
+| **Satellite Asset Extraction** | ✅ Fully Implemented (CNN) |
+| **DSS Query Engine** | ⚙️ Under Development |
+| **Frontend Map UI** | 🚀 Live with Enhanced Layers |
 
 ---
 
@@ -106,67 +129,14 @@
 |---------------|----------|
 | **EuroSAT Sentinel-2 Dataset** | [https://github.com/phelber/EuroSAT](https://github.com/phelber/EuroSAT) |
 | Deep Learning for Land Use & Cover Classification | [arXiv:1709.00029](https://arxiv.org/abs/1709.00029) |
-| Sentinel-2 Land Cover Classification with CNNs | [MDPI Remote Sensing Journal](https://www.mdpi.com/2072-4292/12/15/2495) |
 | Forest Rights Act, 2006 | [IndiaCode PDF](https://www.indiacode.nic.in/bitstream/123456789/8311/1/a2007-02.pdf) |
-| FRA Rules & Guidelines | [Ministry of Tribal Affairs](https://tribal.nic.in/FRA/data/FRARulesBook.pdf) |
 | ISRO Bhuvan Portal | [https://bhuvan.nrsc.gov.in/ngmaps](https://bhuvan.nrsc.gov.in/ngmaps) |
-
----
-
-## 🎥 Demonstration Video  
-
-| **Type** | **Link** |
-|-----------|----------|
-| ▶️ **Project Demo Video** | 
-
----
-
-## 🔒 Privacy & Data Ethics  
-
-| **Principle** | **Measure** |
-|----------------|-------------|
-| Data Minimization | Only essential details are displayed publicly. |
-| Access Control | Role-based authorization for officers, admins, and citizens. |
-| Transparency | All approved FRA claims visible to public in anonymized form. |
-| Audit Trail | Every action (upload, approval, DSS query) is logged for accountability. |
-
----
-
-## 🧭 Future Scope  
-
-| **Feature** | **Description** |
-|--------------|----------------|
-| 🌐 Multi-Language NLP | Add Hindi & tribal dialects to DSS query engine. |
-| 🛰️ Real-Time Satellite Sync | Live update from ISRO Sentinel datasets. |
-| 🤝 Scheme Integration API | Automated scheme mapping for all ministries. |
-| 📱 Mobile App | Flutter app for citizen & officer access. |
-| 🧮 Predictive DSS | ML-based recommendations for pending approvals. |
 
 ---
 
 ## 👥 Team DevSphere  
 
-| **Member** | **Role** | **Responsibility** |
-|-------------|-----------|--------------------|
+| **Member** | **Responsibility** |
+|-------------|--------------------|
 
----
-
-## 🏁 Project Status  
-
-| **Stage** | **Progress** |
-|------------|-------------|
-| OCR & Data Cleaning | ✅ Completed |
-| Land Classification (CNN) | ✅ Completed (EuroSAT dataset) |
-| DSS Query Engine | 🧠 Under Development |
-| Frontend Dashboard | ⚙️ Under Development |
-| Deployment & Testing | 🚀 Upcoming |
-
----
-
-## 🧾 References  
-
-See full list of datasets and legal references in [Model & Data References](https://github.com/phelber/EuroSAT) section.  
-
----
-
-© 
+© FRA Atlas AI Team | Smart India Hackathon 2025

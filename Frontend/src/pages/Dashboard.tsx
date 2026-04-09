@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { BarChart3, Clock, Download, FileText, Filter, Globe2, MapPin, TimerReset, TrendingUp } from "lucide-react";
+import { BarChart3, Clock, Download, FileText, Filter, Globe2, MapPin, TimerReset, TrendingUp, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,6 +33,21 @@ const Dashboard = () => {
   const [claims, setClaims] = useState<Claim[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [chainStatus, setChainStatus] = useState<"idle" | "safe" | "error">("idle");
+  const [chainMessage, setChainMessage] = useState("");
+
+  const verifyIntegrity = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/upload/verify-chain`);
+      if (!res.ok) throw new Error("Verification failed");
+      const data = await res.json();
+      setChainStatus(data.status);
+      setChainMessage(data.message);
+    } catch {
+      setChainStatus("error");
+      setChainMessage("Could not connect to integrity Node");
+    }
+  };
 
   useEffect(() => {
     const loadClaims = async () => {
@@ -179,15 +194,31 @@ const Dashboard = () => {
             Live overview of claims currently saved in the portal database
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" disabled>
-            <Filter className="h-4 w-4 mr-2" />
-            Live View
-          </Button>
-          <Button variant="outline" size="sm" disabled>
-            <Download className="h-4 w-4 mr-2" />
-            Export
-          </Button>
+        <div className="flex flex-col gap-2 items-end">
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={verifyIntegrity}>
+              <ShieldCheck className="h-4 w-4 mr-2 text-indigo-600" />
+              Check Data Integrity
+            </Button>
+            <Button variant="outline" size="sm" disabled>
+              <Filter className="h-4 w-4 mr-2" />
+              Live View
+            </Button>
+            <Button variant="outline" size="sm" disabled>
+              <Download className="h-4 w-4 mr-2" />
+              Export
+            </Button>
+          </div>
+          {chainStatus === "safe" && (
+            <div className="text-sm bg-green-100 text-green-800 px-3 py-1 rounded-md border border-green-300">
+              ✅ {chainMessage}
+            </div>
+          )}
+          {chainStatus === "error" && (
+            <div className="text-sm bg-red-100 text-red-800 px-3 py-1 rounded-md border border-red-300">
+              🚨 {chainMessage}
+            </div>
+          )}
         </div>
       </div>
 

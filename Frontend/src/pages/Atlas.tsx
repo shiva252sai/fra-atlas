@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   MapContainer,
   TileLayer,
   Marker,
   Popup,
-  Polygon,
+  Circle,
   useMap,
 } from "react-leaflet";
+import MarkerClusterGroup from "react-leaflet-cluster";
 import {
   Card,
   CardContent,
@@ -15,9 +16,10 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Info, Trash2 } from "lucide-react";
+import { Info, Trash2, Layers } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import "leaflet.heat";
 
 // ✅ Fix for Leaflet icons in React
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -41,6 +43,7 @@ interface Claim {
   coordinates: string;
   claim_id: string;
   status: string;
+  claim_type?: string;
   land_use?: string;
   cultivation?: string;
   phone?: string;
@@ -82,44 +85,38 @@ const MapAutoFit = ({ claims }: { claims: Claim[] }) => {
   return null;
 };
 
-// Utility: area to square polygon
-const areaToSquareBounds = (lat: number, lng: number, areaStr: string) => {
-  try {
-    let area = parseFloat(areaStr);
-    if (isNaN(area)) return [];
-
-    if ((areaStr || "").toLowerCase().includes("hectare")) {
-      area = area * 10000;
-    } else if ((areaStr || "").toLowerCase().includes("acre")) {
-      area = area * 4046.86;
-    } else {
-      return [];
-    }
-
-    const side = Math.sqrt(area);
-    const offsetLat = (side / 111320) / 2;
-    const offsetLng =
-      (side / (40075000 * Math.cos((lat * Math.PI) / 180) / 360)) / 2;
-
-    return [
-      [lat - offsetLat, lng - offsetLng],
-      [lat - offsetLat, lng + offsetLng],
-      [lat + offsetLat, lng + offsetLng],
-      [lat + offsetLat, lng - offsetLng],
-    ];
-  } catch {
-    return [];
-  }
+// Heatmap Integration
+const HeatmapLayer = ({ claims }: { claims: Claim[] }) => {
+  const map = useMap();
+  useEffect(() => {
+    const points = claims
+      .map((c) => parseCoordinates(c.coordinates))
+      .filter((coords): coords is [number, number] => coords !== null);
+    if (!points.length) return;
+    const heatArr = points.map((p) => [p[0], p[1], 1] as [number, number, number]);
+    const heatLayer = (L as any).heatLayer(heatArr, {
+      radius: 25,
+      blur: 15,
+      maxZoom: 17,
+      gradient: { 0.4: "blue", 0.6: "cyan", 0.7: "lime", 0.8: "yellow", 1.0: "red" }
+    });
+    heatLayer.addTo(map);
+    return () => {
+      map.removeLayer(heatLayer);
+    };
+  }, [map, claims]);
+  return null;
 };
 
 const Atlas = () => {
   const [layers, setLayers] = useState({
     ifr: true,
     cfr: true,
-    cr: false,
+    cr: true,
+    extents: true,
     villages: true,
-    landuse: false,
-    waterBodies: true,
+    heat: false,
+    clustering: true,
   });
 
   const [claims, setClaims] = useState<Claim[]>([]);
@@ -128,8 +125,6 @@ const Atlas = () => {
 
   // Search states
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [stateFilter, setStateFilter] = useState("");
   const [searchResults, setSearchResults] = useState<Claim[]>([]);
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -159,7 +154,7 @@ const Atlas = () => {
     void loadAll();
   }, []);
 
-  const toggleLayer = (layerId: string) => {
+  const toggleLayer = (layerId: keyof typeof layers) => {
     setLayers((prev) => ({ ...prev, [layerId]: !prev[layerId] }));
   };
 
@@ -172,7 +167,7 @@ const Atlas = () => {
     else if (safeStatus === "rejected") color = "#dc2626";
 
     return L.divIcon({
-      html: `<div style="background-color: ${color}; width: 18px; height: 18px; border-radius: 50%; border: 2px solid white;"></div>`,
+      html: `<div style="background-color: ${color}; width: 18px; height: 18px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
       iconSize: [18, 18],
       className: "custom-marker",
     });
@@ -194,19 +189,17 @@ const Atlas = () => {
     }
   };
 
-  const buildSearchUrl = (q?: string, status?: string, state?: string) => {
+  const buildSearchUrl = (q?: string) => {
     const base = BACKEND_URL.endsWith("/search")
       ? BACKEND_URL
       : `${BACKEND_URL}/search`;
     const params = new URLSearchParams();
     if (q) params.append("q", q);
-    if (status) params.append("status", status);
-    if (state) params.append("state", state);
     return `${base}?${params.toString()}`;
   };
 
-  const doSearch = async (q: string, status?: string, state?: string) => {
-    if (!q && !status && !state) {
+  const doSearch = async (q: string) => {
+    if (!q) {
       setSearchResults([]);
       setFilteredClaims(claims);
       setShowDropdown(false);
@@ -215,12 +208,12 @@ const Atlas = () => {
     setLoadingSearch(true);
     setShowDropdown(true);
     try {
-      const url = buildSearchUrl(q || undefined, status || undefined, state || undefined);
+      const url = buildSearchUrl(q || undefined);
       const res = await fetch(url);
       const data = await res.json();
       const results = Array.isArray(data) ? data : (data.results || []);
       setSearchResults(results);
-      if (results.length === 0) setFilteredClaims(claims);
+      setFilteredClaims(results);
     } catch (err) {
       console.error("Search error:", err);
       setSearchResults([]);
@@ -234,7 +227,7 @@ const Atlas = () => {
     setQuery(value);
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(() => {
-      doSearch(value.trim(), statusFilter.trim(), stateFilter.trim());
+      doSearch(value.trim());
     }, 350);
   };
 
@@ -256,8 +249,6 @@ const Atlas = () => {
 
   const handleResetMap = () => {
     setQuery("");
-    setStatusFilter("");
-    setStateFilter("");
     setSearchResults([]);
     setFilteredClaims(claims);
     setShowDropdown(false);
@@ -285,11 +276,99 @@ const Atlas = () => {
     }
   };
 
+  // Pre-calculate Village Coverage Zones
+  const villageZones = useMemo(() => {
+    if (!layers.villages) return [];
+    const grouped: Record<string, { lat: number; lng: number; count: number }> = {};
+    filteredClaims.forEach(c => {
+       const coords = parseCoordinates(c.coordinates);
+       if (!coords) return;
+       const vName = c.village_name || 'Unknown';
+       if (!grouped[vName]) grouped[vName] = { lat: 0, lng: 0, count: 0 };
+       grouped[vName].lat += coords[0];
+       grouped[vName].lng += coords[1];
+       grouped[vName].count += 1;
+    });
+    return Object.entries(grouped).map(([vName, data]) => ({
+      name: vName,
+      lat: data.lat / data.count,
+      lng: data.lng / data.count,
+      radius: Math.min(2000 + data.count * 1000, 15000)
+    }));
+  }, [filteredClaims, layers.villages]);
+
+  const renderMarkers = () => {
+    return filteredClaims.map((claim) => {
+      const coords = parseCoordinates(claim.coordinates);
+      if (!coords) return null;
+      const [lat, lng] = coords;
+
+      const cType = (claim.claim_type || claim.claim_id || "IFR").toUpperCase();
+      let typeFlags = { ifr: false, cr: false, cfr: false };
+      if (cType.includes("IFR")) typeFlags.ifr = true;
+      else if (cType.includes("CFR")) typeFlags.cfr = true;
+      else if (cType.includes("CR")) typeFlags.cr = true;
+      else typeFlags.ifr = true;
+
+      // Filter layer overrides
+      if (typeFlags.ifr && !layers.ifr) return null;
+      if (typeFlags.cr && !layers.cr) return null;
+      if (typeFlags.cfr && !layers.cfr) return null;
+
+      // Convert Area to real radius
+      let radius = 0;
+      if (layers.extents) {
+         let areaSqm = 0;
+         const aStr = (claim.total_area_claimed || "").toLowerCase();
+         let areaRaw = parseFloat(aStr);
+         if (!isNaN(areaRaw)) {
+            if (aStr.includes("hectare")) areaSqm = areaRaw * 10000;
+            else if (aStr.includes("acre") || !aStr) areaSqm = areaRaw * 4046.86;
+         }
+         radius = areaSqm > 0 ? Math.sqrt(areaSqm / Math.PI) : 0;
+      }
+
+      return (
+        <React.Fragment key={claim.id}>
+          {!layers.heat && (
+            <Marker
+              position={[lat, lng]}
+              icon={createCustomIcon(claim.status)}
+              eventHandlers={{ click: () => setSelectedFeature(claim) }}
+            >
+              <Popup>
+                <div className="w-64 text-sm">
+                  <h4 className="font-semibold">{claim.patta_holder_name}</h4>
+                  <p className="text-xs text-gray-500">{claim.claim_id} ({cType})</p>
+                  <p className="text-xs text-gray-500">Area: {claim.total_area_claimed}</p>
+                  <div className="mt-2">{getStatusBadge(claim.status)}</div>
+                </div>
+              </Popup>
+            </Marker>
+          )}
+
+          {layers.extents && radius > 0 && (
+             <Circle
+               center={[lat, lng]}
+               radius={radius}
+               pathOptions={{
+                 color: (claim.status || "").toLowerCase() === "verified" ? "green" : "blue",
+                 fillOpacity: 0.2,
+                 weight: 2
+               }}
+               eventHandlers={{ click: () => setSelectedFeature(claim) }}
+             />
+          )}
+        </React.Fragment>
+      );
+    });
+  };
+
   return (
     <div className="h-screen flex">
       {/* Sidebar */}
-      <div className="w-80 bg-white shadow-xl border-r overflow-y-auto">
-        <div className="p-5">
+      <div className="w-80 bg-white shadow-xl border-r overflow-y-auto flex flex-col z-10">
+        <div className="p-5 flex-1">
           <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 text-transparent bg-clip-text">
             FRA Atlas
           </h1>
@@ -297,55 +376,66 @@ const Atlas = () => {
             Interactive WebGIS for Forest Rights Act
           </p>
 
+          {/* Layers & Legend Toggle UI */}
+          <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+              <Layers className="h-4 w-4 text-indigo-600" />
+              Layers & Legend
+            </h3>
+            <div className="flex flex-col gap-2">
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer hover:text-indigo-600 transition-colors">
+                <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={layers.ifr} onChange={() => toggleLayer('ifr')} />
+                <span className="w-3 h-3 rounded-full bg-blue-500 border border-black/10"></span> IFR Markers
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer hover:text-indigo-600 transition-colors">
+                <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={layers.cr} onChange={() => toggleLayer('cr')} />
+                <span className="w-3 h-3 rounded-full bg-yellow-500 border border-black/10"></span> CR Markers
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer hover:text-indigo-600 transition-colors">
+                <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={layers.cfr} onChange={() => toggleLayer('cfr')} />
+                <span className="w-3 h-3 rounded-full bg-green-600 border border-black/10"></span> CFR Markers
+              </label>
+              <hr className="my-1 border-gray-200" />
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer hover:text-indigo-600 transition-colors">
+                <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={layers.extents} onChange={() => toggleLayer('extents')} />
+                <div className="w-3 h-3 rounded-full border-2 border-blue-500 bg-blue-500/20"></div>
+                Claim Extent Circles
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer hover:text-indigo-600 transition-colors">
+                <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={layers.villages} onChange={() => toggleLayer('villages')} />
+                <div className="w-3 h-3 rounded-full border-2 border-purple-500 border-dashed bg-purple-500/10"></div>
+                Village Coverage Zones
+              </label>
+              <hr className="my-1 border-gray-200" />
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer hover:text-indigo-600 transition-colors">
+                <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={layers.heat} onChange={() => toggleLayer('heat')} />
+                <span className="w-4 h-2 rounded bg-gradient-to-r from-blue-500 to-red-500"></span>
+                Density Heat Layer
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer hover:text-indigo-600 transition-colors">
+                <input type="checkbox" className="accent-indigo-600 w-4 h-4" checked={layers.clustering} onChange={() => toggleLayer('clustering')} />
+                Marker Clustering
+              </label>
+            </div>
+          </div>
+
           {/* Search Box */}
           <div className="relative mb-4">
             <Input
               value={query}
               onChange={(e) => handleQueryChange(e.target.value)}
               placeholder="Search by name, village, claim ID..."
-              className="pl-9 rounded-xl border-gray-300"
+              className="pl-3 rounded-md border-gray-300"
               onFocus={() => {
                 if (searchResults.length > 0) setShowDropdown(true);
               }}
             />
 
-            {/* Filters */}
-            <div className="mt-2 flex gap-2">
-              <select
-                value={statusFilter}
-                onChange={(e) => {
-                  setStatusFilter(e.target.value);
-                  doSearch(query, e.target.value, stateFilter);
-                }}
-                className="flex-1 px-2 py-1 rounded border text-sm"
-              >
-                <option value="">All Status</option>
-                <option value="verified">Verified</option>
-                <option value="pending">Pending</option>
-                <option value="approved">Approved</option>
-                <option value="rejected">Rejected</option>
-              </select>
 
-              <select
-                value={stateFilter}
-                onChange={(e) => {
-                  setStateFilter(e.target.value);
-                  doSearch(query, statusFilter, e.target.value);
-                }}
-                className="flex-1 px-2 py-1 rounded border text-sm"
-              >
-                <option value="">All States</option>
-                <option value="Chhattisgarh">Chhattisgarh</option>
-                <option value="Madhya Pradesh">Madhya Pradesh</option>
-                <option value="Odisha">Odisha</option>
-                <option value="Tripura">Tripura</option>
-                <option value="Jharkhand">Jharkhand</option>
-              </select>
-            </div>
 
             {/* Search Dropdown */}
             {showDropdown && (
-              <div className="absolute left-0 right-0 mt-2 bg-white shadow-lg border rounded-md max-h-64 overflow-y-auto z-50">
+              <div className="absolute left-0 right-0 mt-2 bg-white shadow-xl border rounded-md max-h-64 overflow-y-auto z-[9999]">
                 {loadingSearch && (
                   <div className="p-3 text-sm text-gray-500">Searching...</div>
                 )}
@@ -361,10 +451,11 @@ const Atlas = () => {
                   searchResults.map((result) => (
                     <div
                       key={result.id}
-                      className="p-3 hover:bg-gray-50 border-b flex justify-between items-start"
+                      className="p-3 hover:bg-gray-50 border-b flex justify-between items-start cursor-pointer"
+                      onClick={() => handleViewOnMap(result)}
                     >
                       <div className="pr-2">
-                        <h4 className="font-medium text-sm">
+                        <h4 className="font-medium text-sm text-indigo-700">
                           {result.patta_holder_name}
                         </h4>
                         <p className="text-xs text-gray-500">
@@ -375,20 +466,14 @@ const Atlas = () => {
                         </p>
                         <div className="mt-2">{getStatusBadge(result.status)}</div>
                       </div>
-                      <button
-                        onClick={() => handleViewOnMap(result)}
-                        className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-                      >
-                        View
-                      </button>
                     </div>
                   ))}
 
                 {searchResults.length > 1 && (
-                  <div className="p-2 text-right">
+                  <div className="p-2 bg-gray-50 text-right sticky bottom-0 border-t">
                     <button
                       onClick={handleViewAllOnMap}
-                      className="text-xs bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600"
+                      className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md hover:bg-indigo-700 font-medium"
                     >
                       View all on Map
                     </button>
@@ -400,43 +485,47 @@ const Atlas = () => {
 
           {/* Selected Feature */}
           {selectedFeature && (
-            <Card className="shadow">
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
+            <Card className="shadow-md border-indigo-100 bg-indigo-50/30">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2 text-indigo-800">
                   <Info className="h-4 w-4" /> Feature Information
                 </CardTitle>
               </CardHeader>
-              <CardContent className="text-sm space-y-2">
-                <p className="font-medium text-lg">
-                  {selectedFeature.patta_holder_name}
-                </p>
-                <p className="font-mono text-xs text-gray-500">
-                  {selectedFeature.claim_id}
-                </p>
-                <div className="grid grid-cols-2 gap-y-1">
-                  <span className="text-gray-500">Village</span>
-                  <span>{selectedFeature.village_name}</span>
-                  <span className="text-gray-500">District</span>
-                  <span>{selectedFeature.district}</span>
-                  <span className="text-gray-500">State</span>
-                  <span>{selectedFeature.state}</span>
-                  <span className="text-gray-500">Area</span>
-                  <span>{selectedFeature.total_area_claimed}</span>
+              <CardContent className="text-sm space-y-3">
+                <div>
+                  <p className="font-semibold text-gray-900 text-base">
+                    {selectedFeature.patta_holder_name}
+                  </p>
+                  <p className="font-mono text-xs text-gray-500">
+                    {selectedFeature.claim_id}
+                  </p>
                 </div>
-                <div className="flex justify-between pt-2 border-t">
+                
+                <div className="grid grid-cols-2 gap-y-2 text-xs">
+                  <span className="text-gray-500 font-medium">Village</span>
+                  <span className="text-gray-900">{selectedFeature.village_name}</span>
+                  <span className="text-gray-500 font-medium">District</span>
+                  <span className="text-gray-900">{selectedFeature.district}</span>
+                  <span className="text-gray-500 font-medium">State</span>
+                  <span className="text-gray-900">{selectedFeature.state}</span>
+                  <span className="text-gray-500 font-medium">Area</span>
+                  <span className="text-gray-900 font-semibold">{selectedFeature.total_area_claimed}</span>
+                </div>
+                
+                <div className="flex justify-between items-center pt-3 border-t">
                   {getStatusBadge(selectedFeature.status)}
                   <div className="flex gap-2">
                     <button
                       onClick={handleDeleteRecord}
                       disabled={deletingId === selectedFeature.id}
-                      className="text-xs bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 disabled:opacity-60"
+                      className="text-xs bg-red-600 text-white px-3 py-1.5 rounded hover:bg-red-700 disabled:opacity-60 transition"
                     >
                       <Trash2 className="inline h-3 w-3 mr-1" />
                       {deletingId === selectedFeature.id ? "Deleting..." : "Delete"}
                     </button>
                     <button
                       onClick={handleResetMap}
-                      className="text-xs bg-gray-200 px-3 py-1 rounded hover:bg-gray-300"
+                      className="text-xs bg-gray-200 text-gray-800 px-3 py-1.5 rounded hover:bg-gray-300 transition"
                     >
                       Reset
                     </button>
@@ -449,7 +538,7 @@ const Atlas = () => {
       </div>
 
       {/* Map */}
-      <div className="flex-1 relative">
+      <div className="flex-1 relative z-0">
         <MapContainer
           center={[22.9734, 78.6569]}
           zoom={6}
@@ -460,43 +549,29 @@ const Atlas = () => {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           <MapAutoFit claims={filteredClaims} />
-          {filteredClaims.map((claim) => {
-            const coords = parseCoordinates(claim.coordinates);
-            if (!coords) return null;
-            const [lat, lng] = coords;
-            const polygon = areaToSquareBounds(lat, lng, claim.total_area_claimed);
-            return (
-              <React.Fragment key={claim.id}>
-                <Marker
-                  position={[lat, lng]}
-                  icon={createCustomIcon(claim.status)}
-                  eventHandlers={{ click: () => setSelectedFeature(claim) }}
-                >
-                  <Popup>
-                    <div className="w-64 text-sm">
-                      <h4 className="font-semibold">{claim.patta_holder_name}</h4>
-                      <p className="text-xs text-gray-500">{claim.claim_id}</p>
-                      {getStatusBadge(claim.status)}
-                    </div>
-                  </Popup>
-                </Marker>
-                {polygon.length > 0 && (
-                  <Polygon
-                    positions={polygon}
-                    pathOptions={{
-                      color:
-                        (claim.status || "").toLowerCase() === "verified"
-                          ? "green"
-                          : "blue",
-                      weight: 2,
-                      fillOpacity: 0.2,
-                    }}
-                    eventHandlers={{ click: () => setSelectedFeature(claim) }}
-                  />
-                )}
-              </React.Fragment>
-            );
-          })}
+          
+          {layers.heat && <HeatmapLayer claims={filteredClaims} />}
+          
+          {layers.villages && villageZones.map((z, idx) => (
+             <Circle 
+               key={`vz-${idx}`} 
+               center={[z.lat, z.lng]} 
+               radius={z.radius} 
+               pathOptions={{ color: 'purple', fillColor: 'purple', fillOpacity: 0.1, dashArray: '5, 5', weight: 2 }}
+             >
+               <Popup>
+                 <div className="font-semibold text-purple-800">Village Coverage</div>
+                 <div className="font-medium">{z.name}</div>
+               </Popup>
+             </Circle>
+          ))}
+
+          {layers.clustering && !layers.heat ? (
+            <MarkerClusterGroup chunkedLoading maxClusterRadius={40}>
+              {renderMarkers()}
+            </MarkerClusterGroup>
+          ) : renderMarkers()}
+          
         </MapContainer>
       </div>
     </div>
