@@ -1,35 +1,35 @@
-from fastapi import FastAPI, HTTPException, APIRouter
-from pydantic import BaseModel
-import ee
-import requests
-from PIL import Image
-import numpy as np
 import io
-import os
 import math
-import tensorflow as tf
-from shapely.geometry import Polygon, Point
+import os
 from typing import Optional
+
+from utils.runtime_utils import configure_runtime_noise, configure_tensorflow_logging
+
+configure_runtime_noise()
+
+import ee
+import numpy as np
+import requests
+import tensorflow as tf
+from fastapi import APIRouter, HTTPException
+from PIL import Image
+from pydantic import BaseModel
+
+from utils.gee_utils import get_gee_status, initialize_gee
+
+configure_tensorflow_logging(tf)
 
 router = APIRouter(prefix="/model", tags=["model"])
 
 # ------------------ CONFIG ------------------
-MODEL_PATH = "model.keras"            # <- replace with your trained model file path
-IMG_SIZE = 64                        # model input size (width & height)
+IMG_SIZE = 64
 SAVED_IMAGES_DIR = "saved_images"
 EE_START_DATE = "2023-01-01"
 EE_END_DATE = "2023-12-31"
-THUMB_DIM = 512                       # thumbnail pixel dimension
+THUMB_DIM = 512
 # --------------------------------------------
 
 os.makedirs(SAVED_IMAGES_DIR, exist_ok=True)
-
-# Initialize Earth Engine (assumes ee.Authenticate() was already run interactively)
-try:
-    ee.Initialize()
-except Exception as e:
-    # If EE not initialized, the endpoint will fail later with an explicit message
-    print("Warning: Earth Engine not initialized. Ensure ee.Authenticate() was run earlier.", e)
 
 # Load TensorFlow model
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,20 +37,27 @@ MODEL_PATH = os.path.join(BASE_DIR, "..", "best_model.h5")
 model = None
 
 if not os.path.exists(MODEL_PATH):
-    print(f"⚠️ Warning: Model file {MODEL_PATH} not found. Place your Keras model there.")
+    print(f"Warning: Model file {MODEL_PATH} not found. Place your Keras model there.")
 else:
     try:
         model = tf.keras.models.load_model(MODEL_PATH)
-        print(f"✅ Model loaded from {MODEL_PATH}")
-    except Exception as ex:
-        print(f"⚠️ Warning: could not load model: {ex}")
+        print(f"Model loaded from {MODEL_PATH}")
+    except Exception as exc:
+        print(f"Warning: could not load model: {exc}")
 
-# Example mapping: change according to your model's classes
+
 CLASS_NAMES = [
-    "AnnualCrop", "Forest", "HerbaceousVegetation",
-    "Highway", "Industrial", "Pasture", "PermanentCrop",
-    "Residential", "River", "SeaLake"
-]  # update to match your model output classes
+    "AnnualCrop",
+    "Forest",
+    "HerbaceousVegetation",
+    "Highway",
+    "Industrial",
+    "Pasture",
+    "PermanentCrop",
+    "Residential",
+    "River",
+    "SeaLake",
+]
 
 
 class Claim(BaseModel):
@@ -70,152 +77,157 @@ class Claim(BaseModel):
     claim_id: Optional[str] = None
     date_of_application: Optional[str] = None
 
-# ---------------- Utility functions ----------------
+
 def parse_coordinate(coord_str: str):
-    """Parse 'lat, lon' or 'lon, lat' string into floats and detect order.
-       Returns (lat, lon)."""
+    """Parse 'lat, lon' or 'lon, lat' strings and return (lat, lon)."""
     try:
-        parts = [p.strip() for p in coord_str.replace(',', ' ').split()]
+        parts = [part.strip() for part in coord_str.replace(",", " ").split()]
         if len(parts) < 2:
             raise ValueError("coordinate string must have two numeric values")
-        a, b = float(parts[0]), float(parts[1])
-        # Heuristic: lat in [-90, 90], lon in [-180, 180]; if first value outside [-90,90], treat as lon,lat
-        if -90 <= a <= 90 and -180 <= b <= 180:
-            # assume a is lat, b is lon
-            lat, lon = a, b
-        elif -90 <= b <= 90 and -180 <= a <= 180:
-            # swapped
-            lat, lon = b, a
+        first, second = float(parts[0]), float(parts[1])
+
+        if -90 <= first <= 90 and -180 <= second <= 180:
+            lat, lon = first, second
+        elif -90 <= second <= 90 and -180 <= first <= 180:
+            lat, lon = second, first
         else:
-            # fallback: assume first is lat
-            lat, lon = a, b
+            lat, lon = first, second
+
         return lat, lon
-    except Exception as e:
-        raise ValueError(f"Could not parse coordinates: {e}")
+    except Exception as exc:
+        raise ValueError(f"Could not parse coordinates: {exc}") from exc
+
 
 def parse_area_to_m2(area_str: str):
     """Parse area strings like '1.00 acres', '0.5 ha', '4000 m2' into square meters."""
     if not area_str:
         return None
-    s = area_str.strip().lower()
+
+    text = area_str.strip().lower()
     try:
-        # detect numeric and unit
-        # examples: "1.00 acres", "1 acres", "0.5 ha", "1.2 hectare", "4000 m2"
-        tokens = s.split()
+        tokens = text.split()
         num = float(tokens[0])
         unit = tokens[1] if len(tokens) > 1 else "acres"
     except Exception:
-        # try to strip trailing unit characters
         import re
-        m = re.match(r"([\d\.]+)", s)
-        if not m:
+
+        match = re.match(r"([\d\.]+)", text)
+        if not match:
             return None
-        num = float(m.group(1))
-        unit = s[m.end():].strip() or "acres"
+        num = float(match.group(1))
+        unit = text[match.end():].strip() or "acres"
 
     if unit.startswith("acre"):
         return num * 4046.8564224
     if unit.startswith("ha") or "hect" in unit:
         return num * 10000.0
     if unit.startswith("m") or "sq" in unit:
-        return num  # assume already m2
-    # fallback assume acres
+        return num
     return num * 4046.8564224
 
+
 def make_square_polygon(lat, lon, area_m2):
-    """Create a simple axis-aligned square polygon (lon,lat order) around (lat,lon) with given area in m2."""
+    """Create an axis-aligned square polygon around (lat, lon) in lon/lat order."""
     if area_m2 is None or area_m2 <= 0:
-        # default small square (100m)
         half_side = 50.0
     else:
         side = math.sqrt(area_m2)
-        half_side = side / 2.0  # meters
-    # degrees per meter approx (lat)
+        half_side = side / 2.0
+
     delta_lat = half_side / 111000.0
-    # degrees per meter for lon depends on latitude
     delta_lon = half_side / (111000.0 * math.cos(math.radians(lat)) + 1e-9)
-    # corners in lon, lat order for EE / shapely polygon
     p1 = (lon - delta_lon, lat - delta_lat)
     p2 = (lon + delta_lon, lat - delta_lat)
     p3 = (lon + delta_lon, lat + delta_lat)
     p4 = (lon - delta_lon, lat + delta_lat)
     return [p1, p2, p3, p4, p1]
 
+
 def ee_polygon_from_coords(coords_list):
-    """Convert list of (lon,lat,...,lon,lat) to ee.Geometry.Polygon form."""
     return ee.Geometry.Polygon([coords_list])
 
-def fetch_satellite_thumbnail(aoi_coords, start_date=EE_START_DATE, end_date=EE_END_DATE, dim=THUMB_DIM):
-    """Return a thumbnail URL (PNG) for the AOI. aoi_coords is a list of [ (lon,lat), ... ] with last repeated."""
+
+def fetch_satellite_thumbnail(
+    aoi_coords,
+    start_date=EE_START_DATE,
+    end_date=EE_END_DATE,
+    dim=THUMB_DIM,
+):
+    initialize_gee()
     aoi = ee_polygon_from_coords(aoi_coords)
-    coll = ee.ImageCollection('COPERNICUS/S2')\
-            .filterBounds(aoi)\
-            .filterDate(start_date, end_date)\
-            .select(['B4','B3','B2'])\
-            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 60))\
-            .median()\
-            .clip(aoi)
-    vis = {'min': 0, 'max': 3000, 'bands': ['B4','B3','B2']}
-    url = coll.getThumbURL({'region': aoi, 'dimensions': dim, 'format': 'png', **vis})
-    return url
+    image = (
+        ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
+        .filterBounds(aoi)
+        .filterDate(start_date, end_date)
+        .select(["B4", "B3", "B2"])
+        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))
+        .median()
+        .clip(aoi)
+    )
+    vis = {"min": 0, "max": 3000, "bands": ["B4", "B3", "B2"]}
+    return image.getThumbURL({"region": aoi, "dimensions": dim, "format": "png", **vis})
+
 
 def download_image_from_url(url):
-    r = requests.get(url, timeout=60)
-    r.raise_for_status()
-    return Image.open(io.BytesIO(r.content)).convert("RGB")
+    response = requests.get(url, timeout=60)
+    response.raise_for_status()
+    return Image.open(io.BytesIO(response.content)).convert("RGB")
+
 
 def preprocess_for_model(pil_img, size=IMG_SIZE):
     img = pil_img.resize((size, size))
     arr = np.array(img).astype(np.float32) / 255.0
-    # ensure shape (1, H, W, C)
     return np.expand_dims(arr, axis=0)
+
 
 def predict_with_model(img_array):
     if model is None:
         raise RuntimeError("Model not loaded on server. Place your Keras model at MODEL_PATH.")
-    preds = model.predict(img_array)
+
+    preds = model.predict(img_array, verbose=0)
     prob = float(np.max(preds))
     cls_idx = int(np.argmax(preds))
     cls_name = CLASS_NAMES[cls_idx] if cls_idx < len(CLASS_NAMES) else str(cls_idx)
     return {"class": cls_name, "class_index": cls_idx, "confidence": prob}
 
-# ---------------- API ENDPOINT ----------------
+
+@router.get("/gee-health")
+def gee_health():
+    status = get_gee_status()
+    if not status["initialized"]:
+        raise HTTPException(status_code=503, detail=status)
+    return status
+
+
 @router.post("/predict")
 def predict(claim: Claim):
-    # 1) parse coordinate
     try:
         lat, lon = parse_coordinate(claim.coordinates)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid coordinate: {e}")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid coordinate: {exc}") from exc
 
-    # 2) parse area
     area_m2 = parse_area_to_m2(claim.total_area_claimed or "")
-    # 3) create polygon coordinates (lon,lat order)
     square_coords = make_square_polygon(lat, lon, area_m2)
-    # 4) get thumbnail URL from Earth Engine
+
     try:
         thumb_url = fetch_satellite_thumbnail(square_coords)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Earth Engine error: {e}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Earth Engine error: {exc}") from exc
 
-    # 5) download thumbnail
     try:
         pil_img = download_image_from_url(thumb_url)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to download thumbnail: {e}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to download thumbnail: {exc}") from exc
 
-    # 6) save local image (optional)
     img_filename = f"{SAVED_IMAGES_DIR}/claim_{claim.id}.png"
     pil_img.save(img_filename)
 
-    # 7) preprocess and predict
     try:
         arr = preprocess_for_model(pil_img, size=IMG_SIZE)
         pred = predict_with_model(arr)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Model prediction error: {e}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Model prediction error: {exc}") from exc
 
-    # 8) return response
     return {
         "id": claim.id,
         "claim_id": claim.claim_id,
@@ -223,38 +235,32 @@ def predict(claim: Claim):
         "polygon_coords_lonlat": square_coords,
         "thumbnail_url": thumb_url,
         "saved_image": img_filename,
-        "model_prediction": pred
+        "model_prediction": pred,
     }
 
-# Simple root
+
 def root():
     return {"status": "ok", "note": "POST /predict with claim JSON to run the pipeline."}
 
-# ---------------- HELPER FUNCTION ----------------
+
 def get_asset_data(coords_str: str):
     """
-    Takes a coordinate string (e.g., 'lat, lon'), builds an AOI polygon, 
-    fetches the satellite image via EE, and passes it through the CNN to extract land type.
-    Maps land type to water_available & irrigation rules.
+    Build a sampling AOI, fetch the satellite image via EE, and classify land type.
     Returns: (land_type, confidence, water_available, irrigation)
     """
     try:
         lat, lon = parse_coordinate(coords_str)
-        # using a default 500 sqm area to generate a generic sampling polygon
         square_coords = make_square_polygon(lat, lon, 500.0)
-        
-        # Pull Earth Engine view
+
         thumb_url = fetch_satellite_thumbnail(square_coords)
         pil_img = download_image_from_url(thumb_url)
-        
-        # Analyze with CNN
+
         arr = preprocess_for_model(pil_img, size=IMG_SIZE)
         pred = predict_with_model(arr)
-        
+
         land_type = pred.get("class", "Unknown")
         confidence = pred.get("confidence", 0.0)
-        
-        # Mapping logic
+
         if land_type in ["AnnualCrop", "PermanentCrop"]:
             water_available = False
             irrigation = False
@@ -264,9 +270,8 @@ def get_asset_data(coords_str: str):
         else:
             water_available = True
             irrigation = False
-            
-        return land_type, confidence, water_available, irrigation
 
-    except Exception as e:
-        print(f"Error in get_asset_data helper: {e}")
+        return land_type, confidence, water_available, irrigation
+    except Exception as exc:
+        print(f"Error in get_asset_data helper: {exc}")
         return "Unknown", 0.0, False, False

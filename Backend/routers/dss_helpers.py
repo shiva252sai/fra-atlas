@@ -2,9 +2,9 @@ import psycopg2
 import os
 import json
 from datetime import datetime, date
-from dotenv import load_dotenv
+from utils.env_utils import load_backend_env
 
-load_dotenv()
+load_backend_env()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 

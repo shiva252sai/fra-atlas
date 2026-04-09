@@ -2,7 +2,6 @@ import json
 import re
 import os
 import requests
-from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 # Added imports for DSS
@@ -10,11 +9,12 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
 from db import fetch_schemes
 from typing import Dict, Any
+from utils.env_utils import load_backend_env
 
 # -------------------------
 # Load API Keys
 # -------------------------
-load_dotenv()
+load_backend_env()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 llm = ChatGoogleGenerativeAI(

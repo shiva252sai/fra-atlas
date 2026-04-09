@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Query
 from typing import Optional
-import psycopg2
 import os
-from dotenv import load_dotenv
-from routers.dss_helpers import write_dss_log  # ✅ FIXED
 
-load_dotenv()
+import psycopg2
+from fastapi import APIRouter, Query
+
+from routers.dss_helpers import write_dss_log
+from utils.env_utils import load_backend_env
+
+load_backend_env()
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 router = APIRouter(prefix="/search", tags=["Search"])
@@ -42,7 +44,6 @@ async def search_claims(
 
     results = [dict(zip(columns, row)) for row in rows]
 
-    # log DSS usage
     try:
         write_dss_log(
             user_query=q or "",
@@ -51,8 +52,8 @@ async def search_claims(
             count=len(results),
             sample=results[:3],
         )
-    except Exception as e:
-        print("⚠️ DSS log failed:", e)
+    except Exception as exc:
+        print("DSS log failed:", exc)
 
     cur.close()
     conn.close()

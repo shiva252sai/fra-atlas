@@ -49,6 +49,40 @@ REQUIRED_FIELDS = {
 ALLOWED_CLAIM_TYPES = {"IFR", "CR", "CFR"}
 
 
+def is_stale_asset_result(asset: dict | None) -> bool:
+    if not asset:
+        return True
+
+    land_type = str(asset.get("land_type") or "").strip().lower()
+    confidence = asset.get("confidence")
+    try:
+        confidence_value = float(confidence if confidence is not None else 0.0)
+    except (TypeError, ValueError):
+        confidence_value = 0.0
+
+    return land_type in {"", "unknown"} and confidence_value <= 0.0
+
+
+def compute_and_store_asset_data(cur, doc_id: int, coordinates_val: str):
+    from routers.model_pred import get_asset_data
+
+    land_type, confidence, water_available, irrigation = get_asset_data(coordinates_val)
+    cur.execute(
+        """
+        INSERT INTO asset_data (fra_id, land_type, water_available, irrigation, confidence)
+        VALUES (%s, %s, %s, %s, %s);
+        """,
+        (doc_id, land_type, water_available, irrigation, confidence)
+    )
+    return {
+        "fra_id": doc_id,
+        "land_type": land_type,
+        "confidence": confidence,
+        "water_available": water_available,
+        "irrigation": irrigation,
+    }
+
+
 def normalize_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
@@ -114,7 +148,13 @@ def get_coordinates_from_address(address: str, village: str = "", district: str 
             "limit": 5,
         }
         headers = {"User-Agent": "fra-doc-system"}  # required by Nominatim
-        response = requests.get(url, params=params, headers=headers, timeout=10)
+        
+        import os
+        if "CURL_CA_BUNDLE" in os.environ:
+            del os.environ["CURL_CA_BUNDLE"]
+            
+        import certifi
+        response = requests.get(url, params=params, headers=headers, timeout=10, verify=certifi.where())
 
         if response.status_code == 200:
             results = response.json()
@@ -221,6 +261,32 @@ def normalize_and_validate_payload(payload: DocumentPayload) -> DocumentPayload:
 
 
 def ensure_schema(cur) -> None:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS fra_documents (
+            id SERIAL PRIMARY KEY,
+            patta_holder_name TEXT,
+            father_or_husband_name TEXT,
+            age TEXT,
+            gender TEXT,
+            address TEXT,
+            village_name TEXT,
+            block TEXT,
+            district TEXT,
+            state TEXT,
+            total_area_claimed TEXT,
+            coordinates TEXT,
+            land_use TEXT,
+            claim_id TEXT,
+            date_of_application TEXT,
+            water_bodies TEXT,
+            forest_cover TEXT,
+            homestead TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
     cur.execute(
         """
         ALTER TABLE fra_documents
@@ -372,32 +438,19 @@ async def confirm_document(payload: DocumentPayload):
 
                 # --- 4. MAP LAND TYPE TO ASSET DATA & STORE ---
                 try:
-                    from routers.model_pred import get_asset_data
-                    
                     if coordinates_val:
-                        # Extract asset data automatically using CNN logic
-                        land_type, confidence, water_available, irrigation = get_asset_data(coordinates_val)
-                        
-                        # Debug Prints
+                        asset_result = compute_and_store_asset_data(cur, doc_id, coordinates_val)
+
                         print(f"\n--- DEBUG: NEW ASSET DATA ---")
                         print(f"fra_id: {doc_id}")
-                        print(f"land_type: {land_type}")
-                        print(f"confidence: {confidence}")
-                        print(f"water_available: {water_available}")
-                        print(f"irrigation: {irrigation}")
+                        print(f"land_type: {asset_result['land_type']}")
+                        print(f"confidence: {asset_result['confidence']}")
+                        print(f"water_available: {asset_result['water_available']}")
+                        print(f"irrigation: {asset_result['irrigation']}")
                         print(f"-----------------------------\n")
-                        
-                        # Insert into asset_data
-                        cur.execute(
-                            """
-                            INSERT INTO asset_data (fra_id, land_type, water_available, irrigation, confidence)
-                            VALUES (%s, %s, %s, %s, %s);
-                            """,
-                            (doc_id, land_type, water_available, irrigation, confidence)
-                        )
                         conn.commit()
                 except Exception as e:
-                    print(f"⚠️ Warning: Could not save asset data. Error: {e}")
+                    print(f"Warning: Could not save asset data. Error: {e}")
                 # ----------------------------------------------
 
         return {
@@ -621,12 +674,24 @@ async def get_audit_history(doc_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{doc_id}/assets")
-async def get_document_assets(doc_id: int):
+async def get_document_assets(doc_id: int, refresh: bool = False):
     try:
         with get_db_connection() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                ensure_schema(cur)
+                cur.execute("SELECT id, coordinates FROM fra_documents WHERE id = %s", (doc_id,))
+                doc = cur.fetchone()
+                if not doc:
+                    raise HTTPException(status_code=404, detail="Document not found")
+
                 cur.execute("SELECT * FROM asset_data WHERE fra_id = %s ORDER BY created_at DESC LIMIT 1", (doc_id,))
                 asset = cur.fetchone()
+
+                if (refresh or is_stale_asset_result(asset)) and doc.get("coordinates"):
+                    compute_and_store_asset_data(cur, doc_id, doc["coordinates"])
+                    conn.commit()
+                    cur.execute("SELECT * FROM asset_data WHERE fra_id = %s ORDER BY created_at DESC LIMIT 1", (doc_id,))
+                    asset = cur.fetchone()
         if not asset:
             return {"status": "success", "data": None, "message": "No machine learning asset data found for this claim."}
         return {"status": "success", "data": asset}

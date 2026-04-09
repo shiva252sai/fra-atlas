@@ -1,11 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
+from utils.env_utils import load_backend_env
 
 from routers.dss_router import router as dss_router
 from routers.upload_router import router as upload_router
 from routers.model_pred import router as model_pred
 from routers.Search_router import router as Search
+
+load_backend_env()
 
 app = FastAPI()
 
